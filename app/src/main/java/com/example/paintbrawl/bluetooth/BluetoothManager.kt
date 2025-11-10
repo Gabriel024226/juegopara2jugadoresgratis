@@ -22,6 +22,7 @@ class BluetoothGameManager(private val context: Context) {
     companion object {
         private val MY_UUID: UUID = UUID.fromString("00001101-0000-1000-8000-00805F9B34FB")
         private const val NAME = "MemoramaGame"
+        private const val TAG = "BluetoothGameManager"
     }
 
     private val bluetoothAdapter: BluetoothAdapter? by lazy {
@@ -50,9 +51,11 @@ class BluetoothGameManager(private val context: Context) {
      */
     fun startServer() {
         if (!hasBluetoothPermission()) {
+            android.util.Log.e(TAG, "No hay permisos de Bluetooth")
             return
         }
 
+        android.util.Log.d(TAG, "Iniciando servidor Bluetooth")
         acceptThread?.cancel()
         acceptThread = AcceptThread()
         acceptThread?.start()
@@ -64,9 +67,11 @@ class BluetoothGameManager(private val context: Context) {
      */
     fun connectToDevice(device: BluetoothDevice) {
         if (!hasBluetoothPermission()) {
+            android.util.Log.e(TAG, "No hay permisos de Bluetooth")
             return
         }
 
+        android.util.Log.d(TAG, "Conectando a dispositivo: ${device.name}")
         connectThread?.cancel()
         connectThread = ConnectThread(device)
         connectThread?.start()
@@ -77,7 +82,12 @@ class BluetoothGameManager(private val context: Context) {
      * Envía un mensaje a través de Bluetooth
      */
     fun sendMessage(message: String) {
-        connectedThread?.write(message.toByteArray())
+        android.util.Log.d(TAG, "Intentando enviar mensaje: $message")
+        if (connectedThread == null) {
+            android.util.Log.e(TAG, "No hay conexión establecida (connectedThread es null)")
+        } else {
+            connectedThread?.write(message.toByteArray())
+        }
     }
 
     /**
@@ -85,15 +95,19 @@ class BluetoothGameManager(private val context: Context) {
      */
     fun getPairedDevices(): Set<BluetoothDevice> {
         if (!hasBluetoothPermission()) {
+            android.util.Log.e(TAG, "No hay permisos de Bluetooth para obtener dispositivos")
             return emptySet()
         }
-        return bluetoothAdapter?.bondedDevices ?: emptySet()
+        val devices = bluetoothAdapter?.bondedDevices ?: emptySet()
+        android.util.Log.d(TAG, "Dispositivos emparejados: ${devices.size}")
+        return devices
     }
 
     /**
      * Desconecta y limpia recursos
      */
     fun disconnect() {
+        android.util.Log.d(TAG, "Desconectando...")
         acceptThread?.cancel()
         connectThread?.cancel()
         connectedThread?.cancel()
@@ -121,34 +135,53 @@ class BluetoothGameManager(private val context: Context) {
         private val serverSocket: BluetoothServerSocket? by lazy {
             try {
                 if (hasBluetoothPermission()) {
+                    android.util.Log.d(TAG, "Creando servidor socket")
                     bluetoothAdapter?.listenUsingRfcommWithServiceRecord(NAME, MY_UUID)
-                } else null
+                } else {
+                    android.util.Log.e(TAG, "Sin permisos para crear servidor")
+                    null
+                }
             } catch (e: IOException) {
+                android.util.Log.e(TAG, "Error al crear servidor socket", e)
                 null
             }
         }
 
         override fun run() {
+            android.util.Log.d(TAG, "AcceptThread iniciado, esperando conexión...")
             var socket: BluetoothSocket? = null
-            while (_connectionState.value != ConnectionState.CONNECTED) {
-                try {
-                    socket = serverSocket?.accept()
-                } catch (e: IOException) {
-                    break
-                }
 
-                socket?.let {
-                    manageConnectedSocket(it)
-                    serverSocket?.close()
-                }
+            // Solo intentar aceptar una conexión
+            try {
+                socket = serverSocket?.accept()
+                android.util.Log.d(TAG, "Conexión aceptada!")
+            } catch (e: IOException) {
+                android.util.Log.e(TAG, "Error al aceptar conexión", e)
+                _connectionState.value = ConnectionState.DISCONNECTED
             }
+
+            socket?.let {
+                android.util.Log.d(TAG, "Socket conectado, iniciando ConnectedThread")
+                manageConnectedSocket(it)
+            }
+
+            // Cerrar el servidor socket después de aceptar la conexión
+            try {
+                serverSocket?.close()
+                android.util.Log.d(TAG, "Servidor socket cerrado")
+            } catch (e: IOException) {
+                android.util.Log.e(TAG, "Error al cerrar servidor socket", e)
+            }
+
+            android.util.Log.d(TAG, "AcceptThread finalizado")
         }
 
         fun cancel() {
             try {
                 serverSocket?.close()
+                android.util.Log.d(TAG, "Servidor socket cerrado (cancel)")
             } catch (e: IOException) {
-                // Error al cerrar el socket
+                android.util.Log.e(TAG, "Error al cerrar servidor socket (cancel)", e)
             }
         }
     }
@@ -160,24 +193,33 @@ class BluetoothGameManager(private val context: Context) {
         private val socket: BluetoothSocket? by lazy {
             try {
                 if (hasBluetoothPermission()) {
+                    android.util.Log.d(TAG, "Creando socket cliente")
                     device.createRfcommSocketToServiceRecord(MY_UUID)
-                } else null
+                } else {
+                    android.util.Log.e(TAG, "Sin permisos para crear socket")
+                    null
+                }
             } catch (e: IOException) {
+                android.util.Log.e(TAG, "Error al crear socket cliente", e)
                 null
             }
         }
 
         override fun run() {
+            android.util.Log.d(TAG, "ConnectThread iniciado")
             bluetoothAdapter?.cancelDiscovery()
 
             try {
+                android.util.Log.d(TAG, "Intentando conectar...")
                 socket?.connect()
+                android.util.Log.d(TAG, "Conectado! Iniciando ConnectedThread")
                 socket?.let { manageConnectedSocket(it) }
             } catch (e: IOException) {
+                android.util.Log.e(TAG, "Error al conectar", e)
                 try {
                     socket?.close()
                 } catch (closeException: IOException) {
-                    // Error al cerrar el socket
+                    android.util.Log.e(TAG, "Error al cerrar socket", closeException)
                 }
                 _connectionState.value = ConnectionState.DISCONNECTED
             }
@@ -186,8 +228,9 @@ class BluetoothGameManager(private val context: Context) {
         fun cancel() {
             try {
                 socket?.close()
+                android.util.Log.d(TAG, "Socket cliente cerrado")
             } catch (e: IOException) {
-                // Error al cerrar el socket
+                android.util.Log.e(TAG, "Error al cerrar socket cliente", e)
             }
         }
     }
@@ -201,6 +244,7 @@ class BluetoothGameManager(private val context: Context) {
         private val buffer = ByteArray(1024)
 
         override fun run() {
+            android.util.Log.d(TAG, "ConnectedThread iniciado")
             _connectionState.value = ConnectionState.CONNECTED
             var numBytes: Int
 
@@ -208,27 +252,33 @@ class BluetoothGameManager(private val context: Context) {
                 try {
                     numBytes = inputStream?.read(buffer) ?: break
                     val message = String(buffer, 0, numBytes)
+                    android.util.Log.d(TAG, "Mensaje recibido en ConnectedThread: $message")
                     _receivedMessage.value = message
                 } catch (e: IOException) {
+                    android.util.Log.e(TAG, "Error al leer mensaje", e)
                     _connectionState.value = ConnectionState.DISCONNECTED
                     break
                 }
             }
+            android.util.Log.d(TAG, "ConnectedThread finalizado")
         }
 
         fun write(bytes: ByteArray) {
             try {
                 outputStream?.write(bytes)
+                outputStream?.flush()
+                android.util.Log.d(TAG, "Mensaje enviado: ${String(bytes)}")
             } catch (e: IOException) {
-                // Error al enviar datos
+                android.util.Log.e(TAG, "Error al enviar mensaje", e)
             }
         }
 
         fun cancel() {
             try {
                 socket.close()
+                android.util.Log.d(TAG, "Socket conectado cerrado")
             } catch (e: IOException) {
-                // Error al cerrar el socket
+                android.util.Log.e(TAG, "Error al cerrar socket", e)
             }
         }
     }
@@ -237,6 +287,7 @@ class BluetoothGameManager(private val context: Context) {
      * Maneja un socket conectado
      */
     private fun manageConnectedSocket(socket: BluetoothSocket) {
+        android.util.Log.d(TAG, "Gestionando socket conectado")
         connectedThread?.cancel()
         connectedThread = ConnectedThread(socket)
         connectedThread?.start()

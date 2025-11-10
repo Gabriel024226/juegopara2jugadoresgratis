@@ -1,9 +1,13 @@
 package com.example.paintbrawl.ui.screens
 
 import android.bluetooth.BluetoothAdapter
+import android.bluetooth.BluetoothDevice
 import androidx.compose.animation.*
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -22,12 +26,17 @@ import com.example.paintbrawl.model.GameMode
  */
 @Composable
 fun MenuScreen(
-    onStartGame: (GameMode, Boolean) -> Unit,  // Agregado parámetro isHost
+    onStartGame: (GameMode, Boolean) -> Unit,
     onShowStats: () -> Unit,
-    bluetoothAdapter: BluetoothAdapter?
+    bluetoothAdapter: BluetoothAdapter?,
+    onStartBluetoothServer: () -> Unit = {},
+    onConnectToDevice: (BluetoothDevice) -> Unit = {},
+    getPairedDevices: () -> Set<BluetoothDevice> = { emptySet() }
 ) {
     var showModeSelection by remember { mutableStateOf(false) }
     var showBluetoothDialog by remember { mutableStateOf(false) }
+    var showDeviceSelection by remember { mutableStateOf(false) }
+    var isWaitingForConnection by remember { mutableStateOf(false) }
 
     Box(
         modifier = Modifier
@@ -69,9 +78,9 @@ fun MenuScreen(
 
             Spacer(modifier = Modifier.height(32.dp))
 
-            // Botones del menú
+            // Botones del menú principal
             AnimatedVisibility(
-                visible = !showModeSelection,
+                visible = !showModeSelection && !showBluetoothDialog && !showDeviceSelection && !isWaitingForConnection,
                 enter = fadeIn() + expandVertically(),
                 exit = fadeOut() + shrinkVertically()
             ) {
@@ -93,7 +102,7 @@ fun MenuScreen(
 
             // Selección de modo de juego
             AnimatedVisibility(
-                visible = showModeSelection,
+                visible = showModeSelection && !showBluetoothDialog && !showDeviceSelection,
                 enter = fadeIn() + expandVertically(),
                 exit = fadeOut() + shrinkVertically()
             ) {
@@ -118,12 +127,18 @@ fun MenuScreen(
                     MenuButton(
                         text = "Modo Bluetooth",
                         subtitle = "Jugar por Bluetooth",
-                        onClick = {
-                            // Aquí se debe mostrar diálogo para elegir si es host o cliente
-                            showBluetoothDialog = true
-                        },
+                        onClick = { showBluetoothDialog = true },
                         enabled = bluetoothAdapter?.isEnabled == true
                     )
+
+                    if (bluetoothAdapter?.isEnabled == false) {
+                        Text(
+                            text = "⚠️ Bluetooth desactivado",
+                            fontSize = 14.sp,
+                            color = Color.Yellow,
+                            modifier = Modifier.padding(top = 8.dp)
+                        )
+                    }
 
                     TextButton(
                         onClick = { showModeSelection = false },
@@ -140,7 +155,7 @@ fun MenuScreen(
 
             // Diálogo de selección Bluetooth (Host o Cliente)
             AnimatedVisibility(
-                visible = showBluetoothDialog,
+                visible = showBluetoothDialog && !showDeviceSelection && !isWaitingForConnection,
                 enter = fadeIn() + expandVertically(),
                 exit = fadeOut() + shrinkVertically()
             ) {
@@ -160,6 +175,8 @@ fun MenuScreen(
                         text = "Crear Partida (Host)",
                         subtitle = "Ser el jugador 1 y esperar conexión",
                         onClick = {
+                            isWaitingForConnection = true
+                            onStartBluetoothServer()
                             onStartGame(GameMode.BLUETOOTH, true)
                         }
                     )
@@ -168,7 +185,7 @@ fun MenuScreen(
                         text = "Unirse a Partida (Cliente)",
                         subtitle = "Conectarse como jugador 2",
                         onClick = {
-                            onStartGame(GameMode.BLUETOOTH, false)
+                            showDeviceSelection = true
                         }
                     )
 
@@ -186,6 +203,205 @@ fun MenuScreen(
                         )
                     }
                 }
+            }
+
+            // Pantalla de espera de conexión (Host)
+            AnimatedVisibility(
+                visible = isWaitingForConnection,
+                enter = fadeIn() + expandVertically(),
+                exit = fadeOut() + shrinkVertically()
+            ) {
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(16.dp)
+                ) {
+                    Text(
+                        text = "📡",
+                        fontSize = 64.sp,
+                        modifier = Modifier.padding(bottom = 16.dp)
+                    )
+
+                    CircularProgressIndicator(
+                        color = Color.White,
+                        modifier = Modifier.size(48.dp)
+                    )
+
+                    Text(
+                        text = "Esperando conexión...",
+                        fontSize = 20.sp,
+                        color = Color.White,
+                        fontWeight = FontWeight.Medium,
+                        modifier = Modifier.padding(top = 16.dp)
+                    )
+
+                    Text(
+                        text = "El otro dispositivo debe unirse a la partida",
+                        fontSize = 14.sp,
+                        color = Color.White.copy(alpha = 0.7f),
+                        textAlign = TextAlign.Center
+                    )
+
+                    TextButton(
+                        onClick = {
+                            isWaitingForConnection = false
+                            showBluetoothDialog = true
+                        },
+                        modifier = Modifier.padding(top = 16.dp)
+                    ) {
+                        Text(
+                            text = "Cancelar",
+                            color = Color.White,
+                            fontSize = 16.sp
+                        )
+                    }
+                }
+            }
+
+            // Selección de dispositivo Bluetooth
+            AnimatedVisibility(
+                visible = showDeviceSelection,
+                enter = fadeIn() + expandVertically(),
+                exit = fadeOut() + shrinkVertically()
+            ) {
+                DeviceSelectionScreen(
+                    pairedDevices = getPairedDevices(),
+                    onDeviceSelected = { device ->
+                        onConnectToDevice(device)
+                        onStartGame(GameMode.BLUETOOTH, false)
+                        showDeviceSelection = false
+                    },
+                    onBack = {
+                        showDeviceSelection = false
+                        showBluetoothDialog = true
+                    }
+                )
+            }
+        }
+    }
+}
+
+/**
+ * Pantalla de selección de dispositivos Bluetooth
+ */
+@Composable
+fun DeviceSelectionScreen(
+    pairedDevices: Set<BluetoothDevice>,
+    onDeviceSelected: (BluetoothDevice) -> Unit,
+    onBack: () -> Unit
+) {
+    Column(
+        horizontalAlignment = Alignment.CenterHorizontally,
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Text(
+            text = "Selecciona un dispositivo",
+            fontSize = 20.sp,
+            color = Color.White,
+            fontWeight = FontWeight.Medium,
+            modifier = Modifier.padding(bottom = 16.dp)
+        )
+
+        if (pairedDevices.isEmpty()) {
+            Card(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp),
+                colors = CardDefaults.cardColors(
+                    containerColor = Color.White.copy(alpha = 0.15f)
+                ),
+                shape = RoundedCornerShape(12.dp)
+            ) {
+                Column(
+                    modifier = Modifier.padding(24.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    Text(
+                        text = "No hay dispositivos emparejados",
+                        fontSize = 16.sp,
+                        color = Color.White,
+                        textAlign = TextAlign.Center
+                    )
+                    Text(
+                        text = "Empareja dispositivos en la configuración de Bluetooth",
+                        fontSize = 14.sp,
+                        color = Color.White.copy(alpha = 0.7f),
+                        textAlign = TextAlign.Center,
+                        modifier = Modifier.padding(top = 8.dp)
+                    )
+                }
+            }
+        } else {
+            LazyColumn(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .weight(1f, fill = false)
+                    .heightIn(max = 300.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                items(pairedDevices.toList()) { device ->
+                    DeviceItem(
+                        device = device,
+                        onClick = { onDeviceSelected(device) }
+                    )
+                }
+            }
+        }
+
+        TextButton(
+            onClick = onBack,
+            modifier = Modifier.padding(top = 16.dp)
+        ) {
+            Text(
+                text = "Regresar",
+                color = Color.White,
+                fontSize = 16.sp
+            )
+        }
+    }
+}
+
+/**
+ * Item de dispositivo Bluetooth
+ */
+@Composable
+fun DeviceItem(
+    device: BluetoothDevice,
+    onClick: () -> Unit
+) {
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick),
+        colors = CardDefaults.cardColors(
+            containerColor = Color.White.copy(alpha = 0.2f)
+        ),
+        shape = RoundedCornerShape(12.dp),
+        elevation = CardDefaults.cardElevation(defaultElevation = 4.dp)
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                text = "📱",
+                fontSize = 32.sp,
+                modifier = Modifier.padding(end = 16.dp)
+            )
+
+            Column {
+                Text(
+                    text = device.name ?: "Dispositivo desconocido",
+                    fontSize = 16.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = Color.White
+                )
+                Text(
+                    text = device.address,
+                    fontSize = 12.sp,
+                    color = Color.White.copy(alpha = 0.7f)
+                )
             }
         }
     }
