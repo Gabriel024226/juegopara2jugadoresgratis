@@ -37,38 +37,90 @@ class GameViewModel(
 
     private var bluetoothManager: BluetoothGameManager? = null
     private var messageCollectorJob: kotlinx.coroutines.Job? = null
+    private var connectionObserverJob: kotlinx.coroutines.Job? = null
 
-    init {
-        // Los observadores de Bluetooth se inicializan cuando se crea el BluetoothManager
-    }
+    // Guardar el mazo del host para enviarlo cuando se conecte
+    private var pendingHostCards: List<Card>? = null
+    private var isGameStartSent = false
 
     /**
      * Inicia una nueva partida
      */
     fun startGame(gameMode: GameMode, numberOfPairs: Int = 8, isHost: Boolean = false) {
-        val cards = createCardDeck(numberOfPairs)
+        // Limpiar estado anterior
+        isGameStartSent = false
 
         if (gameMode == GameMode.BLUETOOTH) {
-            // Inicializar Bluetooth
+            // Inicializar Bluetooth solo si no existe
             if (bluetoothManager == null) {
                 bluetoothManager = BluetoothGameManager(context)
                 android.util.Log.d("GameViewModel", "BluetoothManager creado")
             }
 
-            // Cancelar el job anterior si existe
+            // Cancelar jobs anteriores
             messageCollectorJob?.cancel()
+            connectionObserverJob?.cancel()
+
+            if (isHost) {
+                // El HOST genera el mazo
+                val cards = createCardDeck(numberOfPairs)
+                pendingHostCards = cards
+
+                android.util.Log.d("GameViewModel", "HOST: Mazo generado")
+                android.util.Log.d("GameViewModel", "HOST: Cartas en orden:")
+                cards.forEachIndexed { index, card ->
+                    android.util.Log.d("GameViewModel", "  [$index] -> pairId=${card.pairId}, color=${card.color}")
+                }
+
+                _gameState.value = GameState(
+                    cards = cards,
+                    currentPlayer = Player.PLAYER1,
+                    gameMode = gameMode,
+                    player1Score = 0,
+                    player2Score = 0,
+                    movesCount = 0,
+                    pairsFound = 0,
+                    isBluetoothHost = true,
+                    localPlayer = Player.PLAYER1,
+                    isMyTurn = true
+                )
+            } else {
+                // El CLIENTE espera recibir el mazo
+                android.util.Log.d("GameViewModel", "CLIENTE: Esperando mazo del host")
+
+                _gameState.value = GameState(
+                    cards = emptyList(), // Vacío hasta recibir GameStart
+                    currentPlayer = Player.PLAYER1,
+                    gameMode = gameMode,
+                    player1Score = 0,
+                    player2Score = 0,
+                    movesCount = 0,
+                    pairsFound = 0,
+                    isBluetoothHost = false,
+                    localPlayer = Player.PLAYER2,
+                    isMyTurn = false
+                )
+            }
 
             // Observar estado de conexión
-            viewModelScope.launch {
+            connectionObserverJob = viewModelScope.launch {
                 bluetoothManager?.connectionState?.collect { state ->
                     android.util.Log.d("GameViewModel", "Estado conexión: $state")
                     _connectionState.value = state
 
                     // Cuando se establece conexión, el host envía el juego inicial
-                    if (state == BluetoothGameManager.ConnectionState.CONNECTED && isHost) {
-                        delay(1000) // Espera mayor para asegurar que la conexión está lista
-                        android.util.Log.d("GameViewModel", "Conexión establecida, enviando GameStart")
-                        sendGameStart(cards)
+                    if (state == BluetoothGameManager.ConnectionState.CONNECTED && isHost && !isGameStartSent) {
+                        delay(2000) // Espera mayor para asegurar que la conexión está completamente lista
+                        android.util.Log.d("GameViewModel", "HOST: Conexión establecida, enviando GameStart")
+                        pendingHostCards?.let { cards ->
+                            sendGameStart(cards)
+                            isGameStartSent = true
+                        }
+                    }
+
+                    // Si la conexión se pierde, resetear
+                    if (state == BluetoothGameManager.ConnectionState.DISCONNECTED) {
+                        android.util.Log.d("GameViewModel", "Conexión perdida, limpiando recursos")
                     }
                 }
             }
@@ -77,25 +129,15 @@ class GameViewModel(
             messageCollectorJob = viewModelScope.launch {
                 bluetoothManager?.receivedMessage?.collect { message ->
                     message?.let {
-                        android.util.Log.d("GameViewModel", "Mensaje recibido: $it")
+                        android.util.Log.d("GameViewModel", "=== MENSAJE RECIBIDO ===")
+                        android.util.Log.d("GameViewModel", "Raw: $it")
                         handleBluetoothMessage(it)
                     }
                 }
             }
-
-            _gameState.value = GameState(
-                cards = cards,
-                currentPlayer = Player.PLAYER1,
-                gameMode = gameMode,
-                player1Score = 0,
-                player2Score = 0,
-                movesCount = 0,
-                pairsFound = 0,
-                isBluetoothHost = isHost,
-                localPlayer = if (isHost) Player.PLAYER1 else Player.PLAYER2,
-                isMyTurn = isHost // El host (Player1) empieza
-            )
         } else {
+            // Modo LOCAL
+            val cards = createCardDeck(numberOfPairs)
             _gameState.value = GameState(
                 cards = cards,
                 currentPlayer = Player.PLAYER1,
@@ -127,6 +169,20 @@ class GameViewModel(
      */
     fun getPairedDevices(): Set<android.bluetooth.BluetoothDevice> {
         return bluetoothManager?.getPairedDevices() ?: emptySet()
+    }
+
+    /**
+     * Desconectar Bluetooth y limpiar recursos
+     */
+    fun disconnectBluetooth() {
+        android.util.Log.d("GameViewModel", "Desconectando Bluetooth manualmente")
+        messageCollectorJob?.cancel()
+        connectionObserverJob?.cancel()
+        bluetoothManager?.disconnect()
+        bluetoothManager = null
+        pendingHostCards = null
+        isGameStartSent = false
+        _connectionState.value = BluetoothGameManager.ConnectionState.DISCONNECTED
     }
 
     /**
@@ -279,20 +335,41 @@ class GameViewModel(
      * Maneja mensajes recibidos por Bluetooth
      */
     private fun handleBluetoothMessage(messageStr: String) {
-        val message = BluetoothMessageSerializer.deserialize(messageStr) ?: return
+        val message = BluetoothMessageSerializer.deserialize(messageStr)
+
+        if (message == null) {
+            android.util.Log.e("GameViewModel", "ERROR: No se pudo deserializar el mensaje: $messageStr")
+            return
+        }
+
         val state = _gameState.value
 
         viewModelScope.launch {
             when (message) {
                 is BluetoothMessage.GameStart -> {
-                    // El cliente recibe el mazo del host
+                    android.util.Log.d("GameViewModel", "CLIENTE: ===== RECIBIENDO GAME START =====")
+                    android.util.Log.d("GameViewModel", "CLIENTE: Número de pairIds: ${message.cards.size}")
+                    android.util.Log.d("GameViewModel", "CLIENTE: PairIds = ${message.cards}")
+
+                    // Crear las cartas EN EL MISMO ORDEN que el host
                     val cards = message.cards.mapIndexed { index, pairId ->
-                        Card(id = index, pairId = pairId, color = getColorForPairId(pairId))
+                        val color = getColorForPairId(pairId)
+                        Card(id = index, pairId = pairId, color = color)
                     }
+
+                    android.util.Log.d("GameViewModel", "CLIENTE: Cartas reconstruidas:")
+                    cards.forEachIndexed { index, card ->
+                        android.util.Log.d("GameViewModel", "  [$index] -> pairId=${card.pairId}, color=${card.color}")
+                    }
+
+                    // Actualizar el estado con el mazo recibido
                     _gameState.value = state.copy(cards = cards)
+                    android.util.Log.d("GameViewModel", "CLIENTE: Mazo sincronizado correctamente")
                 }
 
                 is BluetoothMessage.CardFlipped -> {
+                    android.util.Log.d("GameViewModel", "Carta volteada por oponente: ${message.cardIndex}")
+
                     // Voltear la carta del oponente
                     val updatedCards = state.cards.toMutableList()
                     updatedCards[message.cardIndex] = updatedCards[message.cardIndex].copy(isFlipped = true)
@@ -307,12 +384,13 @@ class GameViewModel(
 
                     // Si ya hay 2 cartas, esperar el resultado del match
                     if (updatedSelectedCards.size >= 2) {
-                        // Mostrar las cartas volteadas
                         delay(1000)
                     }
                 }
 
                 is BluetoothMessage.MatchResult -> {
+                    android.util.Log.d("GameViewModel", "Resultado del match: isMatch=${message.isMatch}")
+
                     // Aplicar resultado del match
                     val updatedCards = state.cards.toMutableList()
 
@@ -340,14 +418,13 @@ class GameViewModel(
                             selectedCards = listOf(message.card1Index, message.card2Index)
                         )
 
-                        // Esperar antes de voltear de vuelta
                         delay(300)
 
                         _showMismatchAnimation.value = true
                         delay(500)
                         _showMismatchAnimation.value = false
 
-                        // Ahora voltear de vuelta
+                        // Voltear de vuelta
                         updatedCards[message.card1Index] = updatedCards[message.card1Index].copy(isFlipped = false)
                         updatedCards[message.card2Index] = updatedCards[message.card2Index].copy(isFlipped = false)
                     }
@@ -383,6 +460,7 @@ class GameViewModel(
                 }
 
                 BluetoothMessage.GameReset -> {
+                    android.util.Log.d("GameViewModel", "Reinicio solicitado por oponente")
                     resetGame()
                 }
             }
@@ -393,11 +471,24 @@ class GameViewModel(
      * Envía el inicio del juego por Bluetooth (solo host)
      */
     private fun sendGameStart(cards: List<Card>) {
+        // Enviar los pairIds en el orden exacto
         val pairIds = cards.map { it.pairId }
         val message = BluetoothMessage.GameStart(pairIds)
         val serialized = BluetoothMessageSerializer.serialize(message)
-        android.util.Log.d("GameViewModel", "Enviando GameStart: $serialized")
+
+        android.util.Log.d("GameViewModel", "HOST: ===== ENVIANDO GAME START =====")
+        android.util.Log.d("GameViewModel", "HOST: Número de cartas: ${pairIds.size}")
+        android.util.Log.d("GameViewModel", "HOST: PairIds = $pairIds")
+        android.util.Log.d("GameViewModel", "HOST: Mensaje serializado: $serialized")
+
         bluetoothManager?.sendMessage(serialized)
+
+        // Enviar dos veces para asegurar que llega
+        viewModelScope.launch {
+            delay(500)
+            android.util.Log.d("GameViewModel", "HOST: Reenviando GameStart por seguridad")
+            bluetoothManager?.sendMessage(serialized)
+        }
     }
 
     /**
@@ -430,7 +521,7 @@ class GameViewModel(
     }
 
     /**
-     * Obtiene el color para un pairId
+     * Obtiene el color para un pairId de forma consistente
      */
     private fun getColorForPairId(pairId: Int): androidx.compose.ui.graphics.Color {
         val colors = listOf(
@@ -470,7 +561,6 @@ class GameViewModel(
         val isHost = _gameState.value.isBluetoothHost
 
         if (currentMode == GameMode.BLUETOOTH && isHost) {
-            // Solo el host puede reiniciar en modo Bluetooth
             bluetoothManager?.sendMessage(BluetoothMessageSerializer.serialize(BluetoothMessage.GameReset))
         }
 
@@ -486,7 +576,6 @@ class GameViewModel(
             val player1Name = Player.PLAYER1.getName()
             val player2Name = Player.PLAYER2.getName()
 
-            // Actualizar estadísticas de ambos jugadores
             repository.updatePlayerStats(
                 playerName = player1Name,
                 won = state.winner == Player.PLAYER1,
@@ -503,7 +592,6 @@ class GameViewModel(
                 score = state.player2Score
             )
 
-            // Guardar historial del juego
             repository.saveGameHistory(
                 player1Name = player1Name,
                 player2Name = player2Name,
@@ -521,9 +609,8 @@ class GameViewModel(
      */
     override fun onCleared() {
         super.onCleared()
-        android.util.Log.d("GameViewModel", "onCleared - desconectando Bluetooth")
-        messageCollectorJob?.cancel()
-        bluetoothManager?.disconnect()
+        android.util.Log.d("GameViewModel", "onCleared - limpiando todos los recursos")
+        disconnectBluetooth()
     }
 }
 

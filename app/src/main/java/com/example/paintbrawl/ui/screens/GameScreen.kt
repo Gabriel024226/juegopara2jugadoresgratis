@@ -51,6 +51,11 @@ fun GameScreen(
         }
     }
 
+    // Verificar si el cliente ha recibido el mazo
+    val isWaitingForDeck = gameState.gameMode == GameMode.BLUETOOTH &&
+            !gameState.isBluetoothHost &&
+            gameState.cards.isEmpty()
+
     Box(
         modifier = Modifier
             .fillMaxSize()
@@ -63,128 +68,157 @@ fun GameScreen(
                 )
             )
     ) {
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(16.dp)
-        ) {
-            // Top Bar
-            TopAppBar(
-                title = {
-                    Text(
-                        "MEMORAMA",
-                        fontWeight = FontWeight.Bold
-                    )
-                },
-                navigationIcon = {
-                    IconButton(onClick = onBackToMenu) {
-                        Icon(Icons.Default.ArrowBack, "Volver")
-                    }
-                },
-                actions = {
-                    IconButton(onClick = { viewModel.resetGame() }) {
-                        Icon(Icons.Default.Refresh, "Reiniciar")
-                    }
-                },
-                colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = Color.Transparent,
-                    titleContentColor = Color.White,
-                    navigationIconContentColor = Color.White,
-                    actionIconContentColor = Color.White
-                )
-            )
-
-            Spacer(modifier = Modifier.height(16.dp))
-
-            // Panel de información de jugadores
-            PlayerInfoPanel(
-                currentPlayer = gameState.currentPlayer,
-                score1 = gameState.player1Score,
-                score2 = gameState.player2Score,
-                isBluetoothMode = gameState.gameMode == GameMode.BLUETOOTH,
-                localPlayer = gameState.localPlayer,
-                isMyTurn = gameState.isMyTurn
-            )
-
-            Spacer(modifier = Modifier.height(16.dp))
-
-            // Información adicional
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceEvenly
+        if (isWaitingForDeck) {
+            // Pantalla de espera mientras se sincroniza el mazo
+            Box(
+                modifier = Modifier.fillMaxSize(),
+                contentAlignment = Alignment.Center
             ) {
-                InfoCard("Movimientos", gameState.movesCount.toString())
-                InfoCard("Parejas", "${gameState.pairsFound}/${gameState.cards.size / 2}")
-            }
-
-            Spacer(modifier = Modifier.height(24.dp))
-
-            // Indicador de turno en modo Bluetooth
-            if (gameState.gameMode == GameMode.BLUETOOTH) {
-                Card(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 16.dp),
-                    colors = CardDefaults.cardColors(
-                        containerColor = if (gameState.isMyTurn)
-                            Color(0xFF4CAF50).copy(alpha = 0.3f)
-                        else
-                            Color(0xFFFF5722).copy(alpha = 0.3f)
-                    ),
-                    shape = RoundedCornerShape(12.dp)
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(16.dp)
                 ) {
-                    Row(
+                    CircularProgressIndicator(
+                        color = Color.White,
+                        modifier = Modifier.size(64.dp)
+                    )
+                    Text(
+                        text = "Sincronizando mazo...",
+                        fontSize = 20.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = Color.White
+                    )
+                    Text(
+                        text = "Esperando configuración del host",
+                        fontSize = 14.sp,
+                        color = Color.White.copy(alpha = 0.7f)
+                    )
+                }
+            }
+        } else {
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(16.dp)
+            ) {
+                // Top Bar
+                TopAppBar(
+                    title = {
+                        Text(
+                            "MEMORAMA",
+                            fontWeight = FontWeight.Bold
+                        )
+                    },
+                    navigationIcon = {
+                        IconButton(onClick = onBackToMenu) {
+                            Icon(Icons.Default.ArrowBack, "Volver")
+                        }
+                    },
+                    actions = {
+                        IconButton(onClick = { viewModel.resetGame() }) {
+                            Icon(Icons.Default.Refresh, "Reiniciar")
+                        }
+                    },
+                    colors = TopAppBarDefaults.topAppBarColors(
+                        containerColor = Color.Transparent,
+                        titleContentColor = Color.White,
+                        navigationIconContentColor = Color.White,
+                        actionIconContentColor = Color.White
+                    )
+                )
+
+                Spacer(modifier = Modifier.height(16.dp))
+
+                // Panel de información de jugadores
+                PlayerInfoPanel(
+                    currentPlayer = gameState.currentPlayer,
+                    score1 = gameState.player1Score,
+                    score2 = gameState.player2Score,
+                    isBluetoothMode = gameState.gameMode == GameMode.BLUETOOTH,
+                    localPlayer = gameState.localPlayer,
+                    isMyTurn = gameState.isMyTurn
+                )
+
+                Spacer(modifier = Modifier.height(16.dp))
+
+                // Información adicional
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceEvenly
+                ) {
+                    InfoCard("Movimientos", gameState.movesCount.toString())
+                    InfoCard("Parejas", "${gameState.pairsFound}/${gameState.cards.size / 2}")
+                }
+
+                Spacer(modifier = Modifier.height(24.dp))
+
+                // Indicador de turno en modo Bluetooth
+                if (gameState.gameMode == GameMode.BLUETOOTH) {
+                    Card(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(16.dp),
-                        horizontalArrangement = Arrangement.Center,
-                        verticalAlignment = Alignment.CenterVertically
+                            .padding(horizontal = 16.dp),
+                        colors = CardDefaults.cardColors(
+                            containerColor = if (gameState.isMyTurn)
+                                Color(0xFF4CAF50).copy(alpha = 0.3f)
+                            else
+                                Color(0xFFFF5722).copy(alpha = 0.3f)
+                        ),
+                        shape = RoundedCornerShape(12.dp)
                     ) {
-                        Text(
-                            text = if (gameState.isMyTurn) "✓ Tu turno" else "⏳ Esperando al oponente...",
-                            fontSize = 16.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = Color.White
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(16.dp),
+                            horizontalArrangement = Arrangement.Center,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = if (gameState.isMyTurn) "✓ Tu turno" else "⏳ Esperando al oponente...",
+                                fontSize = 16.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = Color.White
+                            )
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(16.dp))
+                }
+
+                // Grid de cartas
+                LazyVerticalGrid(
+                    columns = GridCells.Fixed(4),
+                    contentPadding = PaddingValues(8.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                    modifier = Modifier.weight(1f)
+                ) {
+                    itemsIndexed(gameState.cards) { index, card ->
+                        CardItem(
+                            card = card,
+                            onClick = { viewModel.onCardClick(index) },
+                            showMatch = showMatchAnimation && gameState.selectedCards.contains(index),
+                            showMismatch = showMismatchAnimation && gameState.selectedCards.contains(index),
+                            isInteractionEnabled = gameState.isMyTurn && !gameState.isCheckingMatch
                         )
                     }
                 }
-
-                Spacer(modifier = Modifier.height(16.dp))
             }
 
-            // Grid de cartas
-            LazyVerticalGrid(
-                columns = GridCells.Fixed(4),
-                contentPadding = PaddingValues(8.dp),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp),
-                modifier = Modifier.weight(1f)
-            ) {
-                itemsIndexed(gameState.cards) { index, card ->
-                    CardItem(
-                        card = card,
-                        onClick = { viewModel.onCardClick(index) },
-                        showMatch = showMatchAnimation && gameState.selectedCards.contains(index),
-                        showMismatch = showMismatchAnimation && gameState.selectedCards.contains(index),
-                        isInteractionEnabled = gameState.isMyTurn && !gameState.isCheckingMatch
-                    )
-                }
+            // Diálogo de fin de juego
+            if (showGameOverDialog) {
+                GameOverDialog(
+                    winner = gameState.winner,
+                    player1Score = gameState.player1Score,
+                    player2Score = gameState.player2Score,
+                    onDismiss = { showGameOverDialog = false },
+                    onPlayAgain = {
+                        viewModel.resetGame()
+                        showGameOverDialog = false
+                    },
+                    onBackToMenu = onBackToMenu
+                )
             }
-        }
-
-        // Diálogo de fin de juego
-        if (showGameOverDialog) {
-            GameOverDialog(
-                winner = gameState.winner,
-                player1Score = gameState.player1Score,
-                player2Score = gameState.player2Score,
-                onDismiss = { showGameOverDialog = false },
-                onPlayAgain = {
-                    viewModel.resetGame()
-                    showGameOverDialog = false
-                },
-                onBackToMenu = onBackToMenu
-            )
         }
     }
 }

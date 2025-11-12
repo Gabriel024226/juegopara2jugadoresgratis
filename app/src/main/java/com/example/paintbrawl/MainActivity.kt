@@ -40,17 +40,18 @@ class MainActivity : ComponentActivity() {
     private val requestBluetoothPermissions = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
     ) { permissions ->
-        // Manejar resultado de permisos
         val allGranted = permissions.values.all { it }
         if (allGranted) {
-            // Permisos concedidos
+            android.util.Log.d("MainActivity", "Permisos Bluetooth concedidos")
+        } else {
+            android.util.Log.w("MainActivity", "Permisos Bluetooth denegados")
         }
     }
 
     private val enableBluetoothLauncher = registerForActivityResult(
         ActivityResultContracts.StartActivityForResult()
     ) { result ->
-        // Manejar activación de Bluetooth
+        android.util.Log.d("MainActivity", "Resultado activación Bluetooth: ${result.resultCode}")
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -74,23 +75,38 @@ class MainActivity : ComponentActivity() {
 
                     // Observar el estado de conexión Bluetooth
                     LaunchedEffect(connectionState) {
+                        android.util.Log.d("MainActivity", "Estado conexión cambió a: $connectionState")
+
                         if (connectionState == BluetoothGameManager.ConnectionState.CONNECTED) {
                             // Esperar un momento para asegurar sincronización
                             delay(500)
                             if (currentScreen == "menu") {
+                                android.util.Log.d("MainActivity", "Cambiando a pantalla de juego")
                                 currentScreen = "game"
                             }
+                        }
+
+                        // Si se desconecta durante el juego, volver al menú
+                        if (connectionState == BluetoothGameManager.ConnectionState.DISCONNECTED
+                            && currentScreen == "game"
+                            && gameState.gameMode == GameMode.BLUETOOTH
+                            && !gameState.isGameOver) {
+                            android.util.Log.d("MainActivity", "Conexión perdida, volviendo al menú")
+                            delay(1000)
+                            currentScreen = "menu"
                         }
                     }
 
                     when (currentScreen) {
                         "menu" -> MenuScreen(
                             onStartGame = { gameMode, isHost ->
+                                android.util.Log.d("MainActivity", "Iniciando juego - Modo: $gameMode, Host: $isHost")
+
                                 if (gameMode == GameMode.LOCAL) {
                                     viewModel.startGame(gameMode, 8, isHost)
                                     currentScreen = "game"
                                 } else {
-                                    // En modo Bluetooth, solo iniciar el ViewModel
+                                    // En modo Bluetooth, iniciar el ViewModel
                                     // La transición a "game" se hará cuando se conecte
                                     viewModel.startGame(gameMode, 8, isHost)
                                 }
@@ -100,9 +116,11 @@ class MainActivity : ComponentActivity() {
                             },
                             bluetoothAdapter = bluetoothAdapter,
                             onStartBluetoothServer = {
+                                android.util.Log.d("MainActivity", "Iniciando servidor Bluetooth")
                                 viewModel.startBluetoothServer()
                             },
                             onConnectToDevice = { device ->
+                                android.util.Log.d("MainActivity", "Conectando a dispositivo: ${device.name}")
                                 viewModel.connectToDevice(device)
                             },
                             getPairedDevices = {
@@ -131,6 +149,13 @@ class MainActivity : ComponentActivity() {
                                 GameScreen(
                                     viewModel = viewModel,
                                     onBackToMenu = {
+                                        android.util.Log.d("MainActivity", "Volviendo al menú, desconectando Bluetooth")
+
+                                        // Desconectar Bluetooth antes de volver al menú
+                                        if (gameState.gameMode == GameMode.BLUETOOTH) {
+                                            viewModel.disconnectBluetooth()
+                                        }
+
                                         currentScreen = "menu"
                                     }
                                 )
@@ -179,5 +204,10 @@ class MainActivity : ComponentActivity() {
             val enableBtIntent = Intent(BluetoothAdapter.ACTION_REQUEST_ENABLE)
             enableBluetoothLauncher.launch(enableBtIntent)
         }
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        android.util.Log.d("MainActivity", "onDestroy - limpiando recursos")
     }
 }
