@@ -178,7 +178,10 @@ class MainActivity : ComponentActivity() {
                                         },
                                         onSaveGame = {
                                             if (gameState.gameMode != GameMode.BLUETOOTH) {
+                                                android.util.Log.d("MainActivity", "Mostrando diálogo de guardado")
                                                 showSaveDialog = true
+                                            } else {
+                                                android.util.Log.w("MainActivity", "No se puede guardar en modo Bluetooth")
                                             }
                                         }
                                     )
@@ -187,13 +190,25 @@ class MainActivity : ComponentActivity() {
                                 // Diálogo de guardado
                                 if (showSaveDialog) {
                                     SaveGameDialog(
-                                        onDismiss = { showSaveDialog = false },
+                                        onDismiss = {
+                                            android.util.Log.d("MainActivity", "Diálogo de guardado cancelado")
+                                            showSaveDialog = false
+                                        },
                                         onSave = { name, format, tags ->
+                                            android.util.Log.d("MainActivity", "Guardando: name=$name, format=$format, tags=$tags")
                                             viewModel.setSaveFormat(format)
                                             coroutineScope.launch {
-                                                val result = viewModel.saveCurrentGame(name, tags)
-                                                saveResult = result
-                                                showSaveDialog = false
+                                                try {
+                                                    android.util.Log.d("MainActivity", "Iniciando guardado...")
+                                                    val result = viewModel.saveCurrentGame(name, tags)
+                                                    android.util.Log.d("MainActivity", "Resultado: ${if (result.isSuccess) "Éxito" else "Error"}")
+                                                    saveResult = result
+                                                    showSaveDialog = false
+                                                } catch (e: Exception) {
+                                                    android.util.Log.e("MainActivity", "Excepción al guardar", e)
+                                                    saveResult = Result.failure(e)
+                                                    showSaveDialog = false
+                                                }
                                             }
                                         },
                                         currentFormat = preferredSaveFormat
@@ -204,15 +219,23 @@ class MainActivity : ComponentActivity() {
                                 saveResult?.let { result ->
                                     result.fold(
                                         onSuccess = { fileName ->
+                                            android.util.Log.d("MainActivity", "Mostrando diálogo de éxito: $fileName")
                                             SaveSuccessDialog(
                                                 fileName = fileName,
-                                                onDismiss = { saveResult = null }
+                                                onDismiss = {
+                                                    android.util.Log.d("MainActivity", "Cerrando diálogo de éxito")
+                                                    saveResult = null
+                                                }
                                             )
                                         },
                                         onFailure = { error ->
+                                            android.util.Log.e("MainActivity", "Mostrando diálogo de error: ${error.message}")
                                             SaveErrorDialog(
                                                 error = error.message ?: "Error desconocido",
-                                                onDismiss = { saveResult = null }
+                                                onDismiss = {
+                                                    android.util.Log.d("MainActivity", "Cerrando diálogo de error")
+                                                    saveResult = null
+                                                }
                                             )
                                         }
                                     )

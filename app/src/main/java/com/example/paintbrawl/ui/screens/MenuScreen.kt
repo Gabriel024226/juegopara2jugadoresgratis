@@ -42,6 +42,7 @@ fun MenuScreen(
     var isWaitingForConnection by remember { mutableStateOf(false) }
     var showThemeSelection by remember { mutableStateOf(false) }
     var selectedTheme by remember { mutableStateOf(currentTheme) }
+    var selectedGameMode by remember { mutableStateOf<GameMode?>(null) } // NUEVO: Guardar modo seleccionado
 
     val gradient = when (selectedTheme) {
         ThemeColor.GUINDA -> listOf(Color(0xFF6C1D45), Color(0xFF9B2D5E))
@@ -83,7 +84,7 @@ fun MenuScreen(
 
             // Botones del menú principal
             AnimatedVisibility(
-                visible = !showModeSelection && !showBluetoothDialog && !showDeviceSelection && !isWaitingForConnection,
+                visible = !showModeSelection && !showBluetoothDialog && !showDeviceSelection && !isWaitingForConnection && !showThemeSelection,
                 enter = fadeIn() + expandVertically(),
                 exit = fadeOut() + shrinkVertically()
             ) {
@@ -139,14 +140,20 @@ fun MenuScreen(
                         text = "Modo Local (2 Jugadores)",
                         subtitle = "Dos jugadores en un dispositivo",
                         icon = Icons.Default.Group,
-                        onClick = { showThemeSelection = true }
+                        onClick = {
+                            selectedGameMode = GameMode.LOCAL
+                            showThemeSelection = true
+                        }
                     )
 
                     MenuButton(
                         text = "Modo Clarividente",
                         subtitle = "Un jugador, 24 cartas, 3 vidas",
                         icon = Icons.Default.Visibility,
-                        onClick = { showThemeSelection = true }
+                        onClick = {
+                            selectedGameMode = GameMode.CLARIVIDENTE
+                            showThemeSelection = true
+                        }
                     )
 
                     MenuButton(
@@ -218,14 +225,10 @@ fun MenuScreen(
 
                     Button(
                         onClick = {
-                            val mode = if (showModeSelection) {
-                                // Determinar qué modo se seleccionó antes
-                                // Por defecto LOCAL, podemos mejorarlo guardando el estado
-                                GameMode.LOCAL
-                            } else {
-                                GameMode.LOCAL
+                            // CORREGIDO: Usar el modo guardado en selectedGameMode
+                            selectedGameMode?.let { mode ->
+                                onStartGame(mode, false, selectedTheme)
                             }
-                            onStartGame(mode, false, selectedTheme)
                         },
                         modifier = Modifier
                             .fillMaxWidth()

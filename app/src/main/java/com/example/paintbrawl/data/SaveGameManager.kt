@@ -35,32 +35,72 @@ class SaveGameManager(private val context: Context) {
         tags: List<String> = emptyList()
     ): Result<String> = withContext(Dispatchers.IO) {
         try {
+            android.util.Log.d("SaveGameManager", "Iniciando guardado en formato: $format")
+
+            // Generar nombre de archivo
             val extension = when (format) {
                 SaveFormat.TXT -> "txt"
                 SaveFormat.XML -> "xml"
                 SaveFormat.JSON -> "json"
             }
 
-            val fileName = "${savedGame.gameName.replace(" ", "_")}_${System.currentTimeMillis()}.$extension"
+            val sanitizedName = savedGame.gameName.replace(Regex("[^a-zA-Z0-9_-]"), "_")
+            val fileName = "${sanitizedName}_${System.currentTimeMillis()}.$extension"
             val file = File(savesDirectory, fileName)
 
-            val content = when (format) {
-                SaveFormat.TXT -> savedGame.toTxtFormat()
-                SaveFormat.XML -> savedGame.toXmlFormat()
-                SaveFormat.JSON -> savedGame.toJsonFormat()
+            android.util.Log.d("SaveGameManager", "Nombre de archivo: $fileName")
+
+            // Generar contenido según el formato
+            val content = try {
+                when (format) {
+                    SaveFormat.TXT -> savedGame.toTxtFormat()
+                    SaveFormat.XML -> savedGame.toXmlFormat()
+                    SaveFormat.JSON -> savedGame.toJsonFormat()
+                }
+            } catch (e: Exception) {
+                android.util.Log.e("SaveGameManager", "Error generando contenido", e)
+                throw Exception("Error al generar contenido: ${e.message}", e)
             }
 
-            FileOutputStream(file).use { output ->
-                output.write(content.toByteArray())
+            android.util.Log.d("SaveGameManager", "Contenido generado, tamaño: ${content.length} caracteres")
+
+            // Verificar que el contenido no esté vacío o corrupto
+            if (content.isEmpty() || content.contains("\"error\"") || content.startsWith("Error")) {
+                throw Exception("El contenido generado está vacío o corrupto")
             }
 
-            // Guardar metadatos en un archivo separado
-            saveMetadata(savedGame, fileName, format, tags)
+            // Escribir archivo
+            try {
+                FileOutputStream(file).use { output ->
+                    output.write(content.toByteArray(Charsets.UTF_8))
+                    output.flush()
+                }
+                android.util.Log.d("SaveGameManager", "Archivo escrito exitosamente")
+            } catch (e: Exception) {
+                android.util.Log.e("SaveGameManager", "Error escribiendo archivo", e)
+                throw Exception("Error al escribir archivo: ${e.message}", e)
+            }
+
+            // Verificar que el archivo se haya creado correctamente
+            if (!file.exists() || file.length() == 0L) {
+                throw Exception("El archivo no se creó correctamente")
+            }
+
+            android.util.Log.d("SaveGameManager", "Archivo verificado, tamaño: ${file.length()} bytes")
+
+            // Guardar metadatos
+            try {
+                saveMetadata(savedGame, fileName, format, tags)
+                android.util.Log.d("SaveGameManager", "Metadatos guardados")
+            } catch (e: Exception) {
+                android.util.Log.e("SaveGameManager", "Error guardando metadatos", e)
+                // No lanzar excepción aquí, el archivo principal ya está guardado
+            }
 
             Result.success(fileName)
         } catch (e: Exception) {
-            android.util.Log.e("SaveGameManager", "Error saving game: ${e.message}", e)
-            Result.failure(e)
+            android.util.Log.e("SaveGameManager", "Error general guardando partida", e)
+            Result.failure(Exception("Error al guardar: ${e.message}", e))
         }
     }
 

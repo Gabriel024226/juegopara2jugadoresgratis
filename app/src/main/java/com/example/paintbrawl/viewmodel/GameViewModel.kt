@@ -394,44 +394,91 @@ class GameViewModel(
     /**
      * Guarda la partida actual
      */
+    /**
+     * Guarda la partida actual - MÉTODO CORREGIDO
+     */
     suspend fun saveCurrentGame(gameName: String, tags: List<String> = emptyList()): Result<String> {
-        val state = _gameState.value
+        return try {
+            val state = _gameState.value
 
-        if (state.gameMode == GameMode.BLUETOOTH) {
-            return Result.failure(Exception("No se pueden guardar partidas en modo Bluetooth"))
-        }
+            if (state.gameMode == GameMode.BLUETOOTH) {
+                return Result.failure(Exception("No se pueden guardar partidas en modo Bluetooth"))
+            }
 
-        val savedCards = state.cards.map { card ->
-            SavedCard(
-                id = card.id,
-                pairId = card.pairId,
-                colorHex = String.format("#%08X", card.color.value.toInt()),
-                isFlipped = card.isFlipped,
-                isMatched = card.isMatched
+            android.util.Log.d("GameViewModel", "Iniciando guardado de partida: $gameName")
+
+            val savedCards = state.cards.mapIndexed { index, card ->
+                try {
+                    // Convertir color a hex con formato ARGB
+                    val colorValue = card.color.value.toLong()
+                    val colorHex = String.format("#%08X", colorValue)
+
+                    android.util.Log.d("GameViewModel", "Card $index: pairId=${card.pairId}, color=$colorHex")
+
+                    SavedCard(
+                        id = card.id,
+                        pairId = card.pairId,
+                        colorHex = colorHex,
+                        isFlipped = card.isFlipped,
+                        isMatched = card.isMatched
+                    )
+                } catch (e: Exception) {
+                    android.util.Log.e("GameViewModel", "Error procesando carta $index", e)
+                    // En caso de error, usar un color por defecto basado en pairId
+                    SavedCard(
+                        id = card.id,
+                        pairId = card.pairId,
+                        colorHex = "#FFFF0000", // Rojo por defecto
+                        isFlipped = card.isFlipped,
+                        isMatched = card.isMatched
+                    )
+                }
+            }
+
+            android.util.Log.d("GameViewModel", "Cards procesadas: ${savedCards.size}")
+
+            val savedGame = SavedGame(
+                gameName = gameName,
+                gameMode = when (state.gameMode) {
+                    GameMode.CLARIVIDENTE -> "CLARIVIDENTE"
+                    GameMode.LOCAL -> "LOCAL_2PLAYERS"
+                    GameMode.BLUETOOTH -> "BLUETOOTH" // No debería llegar aquí
+                },
+                player1Name = Player.PLAYER1.getName(),
+                player2Name = if (state.gameMode == GameMode.LOCAL) Player.PLAYER2.getName() else null,
+                player1Score = state.player1Score,
+                player2Score = if (state.gameMode == GameMode.LOCAL) state.player2Score else null,
+                currentPlayer = state.currentPlayer.name,
+                movesCount = state.movesCount,
+                pairsFound = state.pairsFound,
+                totalPairs = state.cards.size / 2,
+                lives = if (state.gameMode == GameMode.CLARIVIDENTE) state.lives else null,
+                timeElapsed = state.timeElapsed,
+                cards = savedCards,
+                selectedCards = state.selectedCards,
+                isCheckingMatch = state.isCheckingMatch,
+                themeColor = state.themeColor.name,
+                movementHistory = state.movementHistory
             )
+
+            android.util.Log.d("GameViewModel", "SavedGame creado, llamando a saveGameManager")
+
+            val result = saveGameManager.saveGame(savedGame, _preferredSaveFormat.value, tags)
+
+            result.fold(
+                onSuccess = { fileName ->
+                    android.util.Log.d("GameViewModel", "Partida guardada exitosamente: $fileName")
+                },
+                onFailure = { error ->
+                    android.util.Log.e("GameViewModel", "Error guardando partida", error)
+                }
+            )
+
+            result
+        } catch (e: Exception) {
+            android.util.Log.e("GameViewModel", "Error general al guardar partida", e)
+            Result.failure(Exception("Error al guardar la partida: ${e.message}", e))
         }
-
-        val savedGame = SavedGame(
-            gameName = gameName,
-            gameMode = if (state.gameMode == GameMode.CLARIVIDENTE) "CLARIVIDENTE" else "LOCAL_2PLAYERS",
-            player1Name = Player.PLAYER1.getName(),
-            player2Name = if (state.gameMode == GameMode.LOCAL) Player.PLAYER2.getName() else null,
-            player1Score = state.player1Score,
-            player2Score = if (state.gameMode == GameMode.LOCAL) state.player2Score else null,
-            currentPlayer = state.currentPlayer.name,
-            movesCount = state.movesCount,
-            pairsFound = state.pairsFound,
-            totalPairs = state.cards.size / 2,
-            lives = if (state.gameMode == GameMode.CLARIVIDENTE) state.lives else null,
-            timeElapsed = state.timeElapsed,
-            cards = savedCards,
-            selectedCards = state.selectedCards,
-            isCheckingMatch = state.isCheckingMatch,
-            themeColor = state.themeColor.name,
-            movementHistory = state.movementHistory
-        )
-
-        return saveGameManager.saveGame(savedGame, _preferredSaveFormat.value, tags)
     }
 
     /**
@@ -439,30 +486,58 @@ class GameViewModel(
      */
     suspend fun loadSavedGame(fileName: String): Result<Unit> {
         return try {
+            android.util.Log.d("GameViewModel", "Cargando partida: $fileName")
             val result = saveGameManager.loadGame(fileName)
 
             result.fold(
                 onSuccess = { savedGame ->
+                    android.util.Log.d("GameViewModel", "Partida cargada, procesando datos")
                     timerJob?.cancel()
 
-                    val cards = savedGame.cards.map { savedCard ->
-                        Card(
-                            id = savedCard.id,
-                            pairId = savedCard.pairId,
-                            color = Color(android.graphics.Color.parseColor(savedCard.colorHex)),
-                            isFlipped = savedCard.isFlipped,
-                            isMatched = savedCard.isMatched
-                        )
+                    val cards = savedGame.cards.mapIndexed { index, savedCard ->
+                        try {
+                            // Remover el # si existe
+                            val colorHex = savedCard.colorHex.removePrefix("#")
+
+                            // Parsear el color
+                            val colorInt = when (colorHex.length) {
+                                8 -> colorHex.toLong(16) // AARRGGBB
+                                6 -> ("FF" + colorHex).toLong(16) // Agregar alpha
+                                else -> throw Exception("Formato de color inválido: ${savedCard.colorHex}")
+                            }
+
+                            val color = Color(colorInt)
+
+                            Card(
+                                id = savedCard.id,
+                                pairId = savedCard.pairId,
+                                color = color,
+                                isFlipped = savedCard.isFlipped,
+                                isMatched = savedCard.isMatched
+                            )
+                        } catch (e: Exception) {
+                            android.util.Log.e("GameViewModel", "Error parseando color de carta $index: ${savedCard.colorHex}", e)
+                            // Usar color basado en pairId como respaldo
+                            Card(
+                                id = savedCard.id,
+                                pairId = savedCard.pairId,
+                                color = getColorForPairId(savedCard.pairId),
+                                isFlipped = savedCard.isFlipped,
+                                isMatched = savedCard.isMatched
+                            )
+                        }
                     }
 
                     val gameMode = when (savedGame.gameMode) {
                         "CLARIVIDENTE" -> GameMode.CLARIVIDENTE
+                        "LOCAL_2PLAYERS" -> GameMode.LOCAL
                         else -> GameMode.LOCAL
                     }
 
                     val theme = try {
                         ThemeColor.valueOf(savedGame.themeColor)
                     } catch (e: Exception) {
+                        android.util.Log.w("GameViewModel", "Tema inválido: ${savedGame.themeColor}, usando AZUL")
                         ThemeColor.AZUL
                     }
 
@@ -470,7 +545,12 @@ class GameViewModel(
 
                     _gameState.value = GameState(
                         cards = cards,
-                        currentPlayer = try { Player.valueOf(savedGame.currentPlayer) } catch (e: Exception) { Player.PLAYER1 },
+                        currentPlayer = try {
+                            Player.valueOf(savedGame.currentPlayer)
+                        } catch (e: Exception) {
+                            android.util.Log.w("GameViewModel", "Jugador inválido: ${savedGame.currentPlayer}")
+                            Player.PLAYER1
+                        },
                         player1Score = savedGame.player1Score,
                         player2Score = savedGame.player2Score ?: 0,
                         selectedCards = savedGame.selectedCards,
@@ -487,14 +567,17 @@ class GameViewModel(
 
                     startTimer()
 
+                    android.util.Log.d("GameViewModel", "Partida cargada exitosamente")
                     Result.success(Unit)
                 },
                 onFailure = { exception ->
+                    android.util.Log.e("GameViewModel", "Error al cargar partida", exception)
                     Result.failure(exception)
                 }
             )
         } catch (e: Exception) {
-            Result.failure(e)
+            android.util.Log.e("GameViewModel", "Error general al cargar partida", e)
+            Result.failure(Exception("Error al cargar la partida: ${e.message}", e))
         }
     }
 
