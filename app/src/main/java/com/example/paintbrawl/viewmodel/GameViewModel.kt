@@ -1,12 +1,15 @@
 package com.example.paintbrawl.viewmodel
 
 import android.content.Context
+import androidx.compose.ui.graphics.Color
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.example.paintbrawl.bluetooth.BluetoothGameManager
 import com.example.paintbrawl.data.GameRepository
+import com.example.paintbrawl.data.SaveGameManager
 import com.example.paintbrawl.model.*
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -35,154 +38,165 @@ class GameViewModel(
     )
     val connectionState: StateFlow<BluetoothGameManager.ConnectionState> = _connectionState.asStateFlow()
 
-    private var bluetoothManager: BluetoothGameManager? = null
-    private var messageCollectorJob: kotlinx.coroutines.Job? = null
-    private var connectionObserverJob: kotlinx.coroutines.Job? = null
+    private val _currentTheme = MutableStateFlow(ThemeColor.AZUL)
+    val currentTheme: StateFlow<ThemeColor> = _currentTheme.asStateFlow()
 
-    // Guardar el mazo del host para enviarlo cuando se conecte
+    private val _preferredSaveFormat = MutableStateFlow(SaveFormat.JSON)
+    val preferredSaveFormat: StateFlow<SaveFormat> = _preferredSaveFormat.asStateFlow()
+
+    private var bluetoothManager: BluetoothGameManager? = null
+    private var messageCollectorJob: Job? = null
+    private var connectionObserverJob: Job? = null
+    private var timerJob: Job? = null
+
     private var pendingHostCards: List<Card>? = null
     private var isGameStartSent = false
+
+    val saveGameManager = SaveGameManager(context)
 
     /**
      * Inicia una nueva partida
      */
-    fun startGame(gameMode: GameMode, numberOfPairs: Int = 8, isHost: Boolean = false) {
-        // Limpiar estado anterior
+    fun startGame(
+        gameMode: GameMode,
+        numberOfPairs: Int = 8,
+        isHost: Boolean = false,
+        theme: ThemeColor = ThemeColor.AZUL
+    ) {
         isGameStartSent = false
+        _currentTheme.value = theme
 
         if (gameMode == GameMode.BLUETOOTH) {
-            // Inicializar Bluetooth solo si no existe
-            if (bluetoothManager == null) {
-                bluetoothManager = BluetoothGameManager(context)
-                android.util.Log.d("GameViewModel", "BluetoothManager creado")
-            }
-
-            // Cancelar jobs anteriores
-            messageCollectorJob?.cancel()
-            connectionObserverJob?.cancel()
-
-            if (isHost) {
-                // El HOST genera el mazo
-                val cards = createCardDeck(numberOfPairs)
-                pendingHostCards = cards
-
-                android.util.Log.d("GameViewModel", "HOST: Mazo generado")
-                android.util.Log.d("GameViewModel", "HOST: Cartas en orden:")
-                cards.forEachIndexed { index, card ->
-                    android.util.Log.d("GameViewModel", "  [$index] -> pairId=${card.pairId}, color=${card.color}")
-                }
-
-                _gameState.value = GameState(
-                    cards = cards,
-                    currentPlayer = Player.PLAYER1,
-                    gameMode = gameMode,
-                    player1Score = 0,
-                    player2Score = 0,
-                    movesCount = 0,
-                    pairsFound = 0,
-                    isBluetoothHost = true,
-                    localPlayer = Player.PLAYER1,
-                    isMyTurn = true
-                )
-            } else {
-                // El CLIENTE espera recibir el mazo
-                android.util.Log.d("GameViewModel", "CLIENTE: Esperando mazo del host")
-
-                _gameState.value = GameState(
-                    cards = emptyList(), // Vacío hasta recibir GameStart
-                    currentPlayer = Player.PLAYER1,
-                    gameMode = gameMode,
-                    player1Score = 0,
-                    player2Score = 0,
-                    movesCount = 0,
-                    pairsFound = 0,
-                    isBluetoothHost = false,
-                    localPlayer = Player.PLAYER2,
-                    isMyTurn = false
-                )
-            }
-
-            // Observar estado de conexión
-            connectionObserverJob = viewModelScope.launch {
-                bluetoothManager?.connectionState?.collect { state ->
-                    android.util.Log.d("GameViewModel", "Estado conexión: $state")
-                    _connectionState.value = state
-
-                    // Cuando se establece conexión, el host envía el juego inicial
-                    if (state == BluetoothGameManager.ConnectionState.CONNECTED && isHost && !isGameStartSent) {
-                        delay(2000) // Espera mayor para asegurar que la conexión está completamente lista
-                        android.util.Log.d("GameViewModel", "HOST: Conexión establecida, enviando GameStart")
-                        pendingHostCards?.let { cards ->
-                            sendGameStart(cards)
-                            isGameStartSent = true
-                        }
-                    }
-
-                    // Si la conexión se pierde, resetear
-                    if (state == BluetoothGameManager.ConnectionState.DISCONNECTED) {
-                        android.util.Log.d("GameViewModel", "Conexión perdida, limpiando recursos")
-                    }
-                }
-            }
-
-            // Observar mensajes recibidos
-            messageCollectorJob = viewModelScope.launch {
-                bluetoothManager?.receivedMessage?.collect { message ->
-                    message?.let {
-                        android.util.Log.d("GameViewModel", "=== MENSAJE RECIBIDO ===")
-                        android.util.Log.d("GameViewModel", "Raw: $it")
-                        handleBluetoothMessage(it)
-                    }
-                }
-            }
+            startBluetoothGame(isHost, numberOfPairs)
+        } else if (gameMode == GameMode.CLARIVIDENTE) {
+            startClarividenteMode(theme)
         } else {
-            // Modo LOCAL
+            startLocalGame(numberOfPairs, theme)
+        }
+    }
+
+    private fun startClarividenteMode(theme: ThemeColor) {
+        // Modo clarividente usa los 12 colores (24 cartas)
+        val cards = createCardDeck(12)
+
+        _gameState.value = GameState(
+            cards = cards,
+            currentPlayer = Player.PLAYER1,
+            gameMode = GameMode.CLARIVIDENTE,
+            player1Score = 0,
+            player2Score = 0,
+            movesCount = 0,
+            pairsFound = 0,
+            lives = 3,
+            timeElapsed = 0,
+            themeColor = theme,
+            isMyTurn = true
+        )
+
+        startTimer()
+    }
+
+    private fun startLocalGame(numberOfPairs: Int, theme: ThemeColor) {
+        val cards = createCardDeck(numberOfPairs)
+        _gameState.value = GameState(
+            cards = cards,
+            currentPlayer = Player.PLAYER1,
+            gameMode = GameMode.LOCAL,
+            player1Score = 0,
+            player2Score = 0,
+            movesCount = 0,
+            pairsFound = 0,
+            timeElapsed = 0,
+            themeColor = theme
+        )
+
+        startTimer()
+    }
+
+    private fun startBluetoothGame(isHost: Boolean, numberOfPairs: Int) {
+        if (bluetoothManager == null) {
+            bluetoothManager = BluetoothGameManager(context)
+        }
+
+        messageCollectorJob?.cancel()
+        connectionObserverJob?.cancel()
+
+        if (isHost) {
             val cards = createCardDeck(numberOfPairs)
+            pendingHostCards = cards
+
             _gameState.value = GameState(
                 cards = cards,
                 currentPlayer = Player.PLAYER1,
-                gameMode = gameMode,
+                gameMode = GameMode.BLUETOOTH,
                 player1Score = 0,
                 player2Score = 0,
                 movesCount = 0,
-                pairsFound = 0
+                pairsFound = 0,
+                isBluetoothHost = true,
+                localPlayer = Player.PLAYER1,
+                isMyTurn = true,
+                timeElapsed = 0
             )
+        } else {
+            _gameState.value = GameState(
+                cards = emptyList(),
+                currentPlayer = Player.PLAYER1,
+                gameMode = GameMode.BLUETOOTH,
+                player1Score = 0,
+                player2Score = 0,
+                movesCount = 0,
+                pairsFound = 0,
+                isBluetoothHost = false,
+                localPlayer = Player.PLAYER2,
+                isMyTurn = false,
+                timeElapsed = 0
+            )
+        }
+
+        observeBluetoothConnection(isHost)
+        observeBluetoothMessages()
+        startTimer()
+    }
+
+    private fun observeBluetoothConnection(isHost: Boolean) {
+        connectionObserverJob = viewModelScope.launch {
+            bluetoothManager?.connectionState?.collect { state ->
+                _connectionState.value = state
+
+                if (state == BluetoothGameManager.ConnectionState.CONNECTED && isHost && !isGameStartSent) {
+                    delay(2000)
+                    pendingHostCards?.let { cards ->
+                        sendGameStart(cards)
+                        isGameStartSent = true
+                    }
+                }
+            }
+        }
+    }
+
+    private fun observeBluetoothMessages() {
+        messageCollectorJob = viewModelScope.launch {
+            bluetoothManager?.receivedMessage?.collect { message ->
+                message?.let { handleBluetoothMessage(it) }
+            }
         }
     }
 
     /**
-     * Inicia el servidor Bluetooth (para el host)
+     * Timer para el juego
      */
-    fun startBluetoothServer() {
-        bluetoothManager?.startServer()
-    }
-
-    /**
-     * Conecta a un dispositivo Bluetooth (para el cliente)
-     */
-    fun connectToDevice(device: android.bluetooth.BluetoothDevice) {
-        bluetoothManager?.connectToDevice(device)
-    }
-
-    /**
-     * Obtiene dispositivos emparejados
-     */
-    fun getPairedDevices(): Set<android.bluetooth.BluetoothDevice> {
-        return bluetoothManager?.getPairedDevices() ?: emptySet()
-    }
-
-    /**
-     * Desconectar Bluetooth y limpiar recursos
-     */
-    fun disconnectBluetooth() {
-        android.util.Log.d("GameViewModel", "Desconectando Bluetooth manualmente")
-        messageCollectorJob?.cancel()
-        connectionObserverJob?.cancel()
-        bluetoothManager?.disconnect()
-        bluetoothManager = null
-        pendingHostCards = null
-        isGameStartSent = false
-        _connectionState.value = BluetoothGameManager.ConnectionState.DISCONNECTED
+    private fun startTimer() {
+        timerJob?.cancel()
+        timerJob = viewModelScope.launch {
+            while (true) {
+                delay(1000)
+                val state = _gameState.value
+                if (!state.isGameOver && (state.gameMode != GameMode.BLUETOOTH || state.isMyTurn)) {
+                    _gameState.value = state.copy(timeElapsed = state.timeElapsed + 1000)
+                }
+            }
+        }
     }
 
     /**
@@ -196,7 +210,6 @@ class GameViewModel(
             return
         }
 
-        // Validaciones: no permitir clic si ya hay 2 cartas volteadas o si está verificando
         if (state.isCheckingMatch ||
             state.selectedCards.size >= 2 ||
             state.cards[index].isFlipped ||
@@ -204,7 +217,6 @@ class GameViewModel(
             return
         }
 
-        // Voltear la carta
         val updatedCards = state.cards.toMutableList()
         updatedCards[index] = updatedCards[index].copy(isFlipped = true)
 
@@ -215,12 +227,10 @@ class GameViewModel(
             selectedCards = updatedSelectedCards
         )
 
-        // Enviar mensaje por Bluetooth
         if (state.gameMode == GameMode.BLUETOOTH) {
             sendCardFlipped(index)
         }
 
-        // Si se seleccionaron 2 cartas, verificar si son pareja
         if (updatedSelectedCards.size == 2) {
             checkForMatch()
         }
@@ -234,7 +244,7 @@ class GameViewModel(
         _gameState.value = state.copy(isCheckingMatch = true)
 
         viewModelScope.launch {
-            delay(1000) // Dar tiempo para que el jugador vea ambas cartas
+            delay(1000)
 
             val card1Index = state.selectedCards[0]
             val card2Index = state.selectedCards[1]
@@ -245,194 +255,306 @@ class GameViewModel(
             val isMatch = card1.pairId == card2.pairId
 
             if (isMatch) {
-                // Las cartas coinciden
-                updatedCards[card1Index] = card1.copy(isMatched = true)
-                updatedCards[card2Index] = card2.copy(isMatched = true)
-
-                val newPlayer1Score = if (state.currentPlayer == Player.PLAYER1) state.player1Score + 1 else state.player1Score
-                val newPlayer2Score = if (state.currentPlayer == Player.PLAYER2) state.player2Score + 1 else state.player2Score
-
-                val newPairsFound = state.pairsFound + 1
-                val totalPairs = state.cards.size / 2
-                val isGameOver = newPairsFound == totalPairs
-
-                // Mostrar animación de éxito
-                _showMatchAnimation.value = true
-                delay(500)
-                _showMatchAnimation.value = false
-
-                val newState = state.copy(
-                    cards = updatedCards,
-                    player1Score = newPlayer1Score,
-                    player2Score = newPlayer2Score,
-                    selectedCards = emptyList(),
-                    isCheckingMatch = false,
-                    pairsFound = newPairsFound,
-                    movesCount = state.movesCount + 1,
-                    isGameOver = isGameOver,
-                    winner = if (isGameOver) determineWinner(newPlayer1Score, newPlayer2Score) else null,
-                    // El jugador mantiene su turno si acertó
-                    isMyTurn = if (state.gameMode == GameMode.BLUETOOTH) {
-                        state.currentPlayer == state.localPlayer
-                    } else true
-                )
-
-                _gameState.value = newState
-
-                // Enviar resultado por Bluetooth (el jugador mantiene turno)
-                if (state.gameMode == GameMode.BLUETOOTH) {
-                    sendMatchResult(
-                        card1Index, card2Index, true,
-                        state.currentPlayer, newPlayer1Score, newPlayer2Score
-                    )
-                }
-
-                // Si el juego terminó, guardar estadísticas
-                if (isGameOver) {
-                    saveGameStatistics()
-                }
+                handleMatch(updatedCards, card1Index, card2Index, state)
             } else {
-                // Las cartas no coinciden
-                updatedCards[card1Index] = card1.copy(isFlipped = false)
-                updatedCards[card2Index] = card2.copy(isFlipped = false)
+                handleMismatch(updatedCards, card1Index, card2Index, state)
+            }
+        }
+    }
 
-                // Mostrar animación de error
-                _showMismatchAnimation.value = true
-                delay(500)
-                _showMismatchAnimation.value = false
+    private suspend fun handleMatch(
+        updatedCards: MutableList<Card>,
+        card1Index: Int,
+        card2Index: Int,
+        state: GameState
+    ) {
+        updatedCards[card1Index] = updatedCards[card1Index].copy(isMatched = true)
+        updatedCards[card2Index] = updatedCards[card2Index].copy(isMatched = true)
 
-                // Cambiar de jugador
-                val nextPlayer = when (state.currentPlayer) {
-                    Player.PLAYER1 -> Player.PLAYER2
-                    Player.PLAYER2 -> Player.PLAYER1
-                }
+        val newPlayer1Score = if (state.currentPlayer == Player.PLAYER1 || state.gameMode == GameMode.CLARIVIDENTE)
+            state.player1Score + 1 else state.player1Score
+        val newPlayer2Score = if (state.currentPlayer == Player.PLAYER2) state.player2Score + 1 else state.player2Score
 
-                val newState = state.copy(
-                    cards = updatedCards,
-                    selectedCards = emptyList(),
-                    isCheckingMatch = false,
-                    currentPlayer = nextPlayer,
-                    movesCount = state.movesCount + 1,
-                    isMyTurn = if (state.gameMode == GameMode.BLUETOOTH) {
-                        nextPlayer == state.localPlayer
-                    } else true
-                )
+        val newPairsFound = state.pairsFound + 1
+        val totalPairs = state.cards.size / 2
+        val isGameOver = newPairsFound == totalPairs
 
-                _gameState.value = newState
+        _showMatchAnimation.value = true
+        delay(500)
+        _showMatchAnimation.value = false
 
-                // Enviar resultado por Bluetooth (cambio de turno)
-                if (state.gameMode == GameMode.BLUETOOTH) {
-                    sendMatchResult(
-                        card1Index, card2Index, false,
-                        nextPlayer, state.player1Score, state.player2Score
-                    )
-                }
+        val movement = Movement(
+            moveNumber = state.movementHistory.size + 1,
+            player = state.currentPlayer.name,
+            card1Index = card1Index,
+            card2Index = card2Index,
+            wasMatch = true
+        )
+
+        val newState = state.copy(
+            cards = updatedCards,
+            player1Score = newPlayer1Score,
+            player2Score = newPlayer2Score,
+            selectedCards = emptyList(),
+            isCheckingMatch = false,
+            pairsFound = newPairsFound,
+            movesCount = state.movesCount + 1,
+            isGameOver = isGameOver,
+            winner = if (isGameOver) determineWinner(newPlayer1Score, newPlayer2Score, state.gameMode) else null,
+            movementHistory = state.movementHistory + movement,
+            isMyTurn = if (state.gameMode == GameMode.BLUETOOTH) {
+                state.currentPlayer == state.localPlayer
+            } else true
+        )
+
+        _gameState.value = newState
+
+        if (state.gameMode == GameMode.BLUETOOTH) {
+            sendMatchResult(card1Index, card2Index, true, state.currentPlayer, newPlayer1Score, newPlayer2Score)
+        }
+
+        if (isGameOver) {
+            timerJob?.cancel()
+            if (state.gameMode != GameMode.BLUETOOTH) {
+                saveGameStatistics()
+            }
+        }
+    }
+
+    private suspend fun handleMismatch(
+        updatedCards: MutableList<Card>,
+        card1Index: Int,
+        card2Index: Int,
+        state: GameState
+    ) {
+        updatedCards[card1Index] = updatedCards[card1Index].copy(isFlipped = false)
+        updatedCards[card2Index] = updatedCards[card2Index].copy(isFlipped = false)
+
+        _showMismatchAnimation.value = true
+        delay(500)
+        _showMismatchAnimation.value = false
+
+        val movement = Movement(
+            moveNumber = state.movementHistory.size + 1,
+            player = state.currentPlayer.name,
+            card1Index = card1Index,
+            card2Index = card2Index,
+            wasMatch = false
+        )
+
+        if (state.gameMode == GameMode.CLARIVIDENTE) {
+            // En modo clarividente, se pierden vidas
+            val newLives = state.lives - 1
+            val isGameOver = newLives <= 0
+
+            val newState = state.copy(
+                cards = updatedCards,
+                selectedCards = emptyList(),
+                isCheckingMatch = false,
+                movesCount = state.movesCount + 1,
+                lives = newLives,
+                isGameOver = isGameOver,
+                winner = if (isGameOver) null else state.winner,
+                movementHistory = state.movementHistory + movement
+            )
+
+            _gameState.value = newState
+
+            if (isGameOver) {
+                timerJob?.cancel()
+                saveGameStatistics()
+            }
+        } else {
+            // Cambiar de jugador
+            val nextPlayer = when (state.currentPlayer) {
+                Player.PLAYER1 -> Player.PLAYER2
+                Player.PLAYER2 -> Player.PLAYER1
+            }
+
+            val newState = state.copy(
+                cards = updatedCards,
+                selectedCards = emptyList(),
+                isCheckingMatch = false,
+                currentPlayer = nextPlayer,
+                movesCount = state.movesCount + 1,
+                movementHistory = state.movementHistory + movement,
+                isMyTurn = if (state.gameMode == GameMode.BLUETOOTH) {
+                    nextPlayer == state.localPlayer
+                } else true
+            )
+
+            _gameState.value = newState
+
+            if (state.gameMode == GameMode.BLUETOOTH) {
+                sendMatchResult(card1Index, card2Index, false, nextPlayer, state.player1Score, state.player2Score)
             }
         }
     }
 
     /**
-     * Maneja mensajes recibidos por Bluetooth
+     * Guarda la partida actual
      */
+    suspend fun saveCurrentGame(gameName: String, tags: List<String> = emptyList()): Result<String> {
+        val state = _gameState.value
+
+        if (state.gameMode == GameMode.BLUETOOTH) {
+            return Result.failure(Exception("No se pueden guardar partidas en modo Bluetooth"))
+        }
+
+        val savedCards = state.cards.map { card ->
+            SavedCard(
+                id = card.id,
+                pairId = card.pairId,
+                colorHex = String.format("#%08X", card.color.value.toInt()),
+                isFlipped = card.isFlipped,
+                isMatched = card.isMatched
+            )
+        }
+
+        val savedGame = SavedGame(
+            gameName = gameName,
+            gameMode = if (state.gameMode == GameMode.CLARIVIDENTE) "CLARIVIDENTE" else "LOCAL_2PLAYERS",
+            player1Name = Player.PLAYER1.getName(),
+            player2Name = if (state.gameMode == GameMode.LOCAL) Player.PLAYER2.getName() else null,
+            player1Score = state.player1Score,
+            player2Score = if (state.gameMode == GameMode.LOCAL) state.player2Score else null,
+            currentPlayer = state.currentPlayer.name,
+            movesCount = state.movesCount,
+            pairsFound = state.pairsFound,
+            totalPairs = state.cards.size / 2,
+            lives = if (state.gameMode == GameMode.CLARIVIDENTE) state.lives else null,
+            timeElapsed = state.timeElapsed,
+            cards = savedCards,
+            selectedCards = state.selectedCards,
+            isCheckingMatch = state.isCheckingMatch,
+            themeColor = state.themeColor.name,
+            movementHistory = state.movementHistory
+        )
+
+        return saveGameManager.saveGame(savedGame, _preferredSaveFormat.value, tags)
+    }
+
+    /**
+     * Carga una partida guardada
+     */
+    suspend fun loadSavedGame(fileName: String): Result<Unit> {
+        return try {
+            val result = saveGameManager.loadGame(fileName)
+
+            result.fold(
+                onSuccess = { savedGame ->
+                    timerJob?.cancel()
+
+                    val cards = savedGame.cards.map { savedCard ->
+                        Card(
+                            id = savedCard.id,
+                            pairId = savedCard.pairId,
+                            color = Color(android.graphics.Color.parseColor(savedCard.colorHex)),
+                            isFlipped = savedCard.isFlipped,
+                            isMatched = savedCard.isMatched
+                        )
+                    }
+
+                    val gameMode = when (savedGame.gameMode) {
+                        "CLARIVIDENTE" -> GameMode.CLARIVIDENTE
+                        else -> GameMode.LOCAL
+                    }
+
+                    val theme = try {
+                        ThemeColor.valueOf(savedGame.themeColor)
+                    } catch (e: Exception) {
+                        ThemeColor.AZUL
+                    }
+
+                    _currentTheme.value = theme
+
+                    _gameState.value = GameState(
+                        cards = cards,
+                        currentPlayer = try { Player.valueOf(savedGame.currentPlayer) } catch (e: Exception) { Player.PLAYER1 },
+                        player1Score = savedGame.player1Score,
+                        player2Score = savedGame.player2Score ?: 0,
+                        selectedCards = savedGame.selectedCards,
+                        isCheckingMatch = savedGame.isCheckingMatch,
+                        gameMode = gameMode,
+                        isGameOver = false,
+                        movesCount = savedGame.movesCount,
+                        pairsFound = savedGame.pairsFound,
+                        lives = savedGame.lives ?: 3,
+                        timeElapsed = savedGame.timeElapsed,
+                        themeColor = theme,
+                        movementHistory = savedGame.movementHistory
+                    )
+
+                    startTimer()
+
+                    Result.success(Unit)
+                },
+                onFailure = { exception ->
+                    Result.failure(exception)
+                }
+            )
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    fun setTheme(theme: ThemeColor) {
+        _currentTheme.value = theme
+        val state = _gameState.value
+        _gameState.value = state.copy(themeColor = theme)
+    }
+
+    fun setSaveFormat(format: SaveFormat) {
+        _preferredSaveFormat.value = format
+    }
+
     private fun handleBluetoothMessage(messageStr: String) {
         val message = BluetoothMessageSerializer.deserialize(messageStr)
-
-        if (message == null) {
-            android.util.Log.e("GameViewModel", "ERROR: No se pudo deserializar el mensaje: $messageStr")
-            return
-        }
+        if (message == null) return
 
         val state = _gameState.value
 
         viewModelScope.launch {
             when (message) {
                 is BluetoothMessage.GameStart -> {
-                    android.util.Log.d("GameViewModel", "CLIENTE: ===== RECIBIENDO GAME START =====")
-                    android.util.Log.d("GameViewModel", "CLIENTE: Número de pairIds: ${message.cards.size}")
-                    android.util.Log.d("GameViewModel", "CLIENTE: PairIds = ${message.cards}")
-
-                    // Crear las cartas EN EL MISMO ORDEN que el host
                     val cards = message.cards.mapIndexed { index, pairId ->
                         val color = getColorForPairId(pairId)
                         Card(id = index, pairId = pairId, color = color)
                     }
-
-                    android.util.Log.d("GameViewModel", "CLIENTE: Cartas reconstruidas:")
-                    cards.forEachIndexed { index, card ->
-                        android.util.Log.d("GameViewModel", "  [$index] -> pairId=${card.pairId}, color=${card.color}")
-                    }
-
-                    // Actualizar el estado con el mazo recibido
                     _gameState.value = state.copy(cards = cards)
-                    android.util.Log.d("GameViewModel", "CLIENTE: Mazo sincronizado correctamente")
                 }
-
                 is BluetoothMessage.CardFlipped -> {
-                    android.util.Log.d("GameViewModel", "Carta volteada por oponente: ${message.cardIndex}")
-
-                    // Voltear la carta del oponente
                     val updatedCards = state.cards.toMutableList()
                     updatedCards[message.cardIndex] = updatedCards[message.cardIndex].copy(isFlipped = true)
-
                     val updatedSelectedCards = state.selectedCards + message.cardIndex
-
                     _gameState.value = state.copy(
                         cards = updatedCards,
                         selectedCards = updatedSelectedCards,
                         isCheckingMatch = updatedSelectedCards.size >= 2
                     )
-
-                    // Si ya hay 2 cartas, esperar el resultado del match
-                    if (updatedSelectedCards.size >= 2) {
-                        delay(1000)
-                    }
+                    if (updatedSelectedCards.size >= 2) delay(1000)
                 }
-
                 is BluetoothMessage.MatchResult -> {
-                    android.util.Log.d("GameViewModel", "Resultado del match: isMatch=${message.isMatch}")
-
-                    // Aplicar resultado del match
                     val updatedCards = state.cards.toMutableList()
-
                     if (message.isMatch) {
-                        updatedCards[message.card1Index] = updatedCards[message.card1Index].copy(
-                            isFlipped = true,
-                            isMatched = true
-                        )
-                        updatedCards[message.card2Index] = updatedCards[message.card2Index].copy(
-                            isFlipped = true,
-                            isMatched = true
-                        )
-
+                        updatedCards[message.card1Index] = updatedCards[message.card1Index].copy(isFlipped = true, isMatched = true)
+                        updatedCards[message.card2Index] = updatedCards[message.card2Index].copy(isFlipped = true, isMatched = true)
                         _showMatchAnimation.value = true
                         delay(500)
                         _showMatchAnimation.value = false
                     } else {
-                        // Primero asegurarse de que las cartas estén volteadas
                         updatedCards[message.card1Index] = updatedCards[message.card1Index].copy(isFlipped = true)
                         updatedCards[message.card2Index] = updatedCards[message.card2Index].copy(isFlipped = true)
-
-                        // Actualizar temporalmente para mostrar las cartas
-                        _gameState.value = state.copy(
-                            cards = updatedCards,
-                            selectedCards = listOf(message.card1Index, message.card2Index)
-                        )
-
+                        _gameState.value = state.copy(cards = updatedCards, selectedCards = listOf(message.card1Index, message.card2Index))
                         delay(300)
-
                         _showMismatchAnimation.value = true
                         delay(500)
                         _showMismatchAnimation.value = false
-
-                        // Voltear de vuelta
                         updatedCards[message.card1Index] = updatedCards[message.card1Index].copy(isFlipped = false)
                         updatedCards[message.card2Index] = updatedCards[message.card2Index].copy(isFlipped = false)
                     }
-
                     val newPairsFound = message.player1Score + message.player2Score
-                    val totalPairs = state.cards.size / 2
-                    val isGameOver = newPairsFound == totalPairs
-
+                    val isGameOver = newPairsFound == state.cards.size / 2
                     _gameState.value = state.copy(
                         cards = updatedCards,
                         selectedCards = emptyList(),
@@ -444,66 +566,59 @@ class GameViewModel(
                         movesCount = state.movesCount + 1,
                         isMyTurn = message.currentPlayer == state.localPlayer,
                         isGameOver = isGameOver,
-                        winner = if (isGameOver) determineWinner(message.player1Score, message.player2Score) else null
+                        winner = if (isGameOver) determineWinner(message.player1Score, message.player2Score, state.gameMode) else null
                     )
-
-                    if (isGameOver) {
-                        saveGameStatistics()
-                    }
+                    if (isGameOver) timerJob?.cancel()
                 }
-
                 is BluetoothMessage.TurnChange -> {
                     _gameState.value = state.copy(
                         currentPlayer = message.newPlayer,
                         isMyTurn = message.newPlayer == state.localPlayer
                     )
                 }
-
-                BluetoothMessage.GameReset -> {
-                    android.util.Log.d("GameViewModel", "Reinicio solicitado por oponente")
-                    resetGame()
-                }
+                BluetoothMessage.GameReset -> resetGame()
             }
         }
     }
 
-    /**
-     * Envía el inicio del juego por Bluetooth (solo host)
-     */
+    fun startBluetoothServer() {
+        bluetoothManager?.startServer()
+    }
+
+    fun connectToDevice(device: android.bluetooth.BluetoothDevice) {
+        bluetoothManager?.connectToDevice(device)
+    }
+
+    fun getPairedDevices(): Set<android.bluetooth.BluetoothDevice> {
+        return bluetoothManager?.getPairedDevices() ?: emptySet()
+    }
+
+    fun disconnectBluetooth() {
+        messageCollectorJob?.cancel()
+        connectionObserverJob?.cancel()
+        bluetoothManager?.disconnect()
+        bluetoothManager = null
+        pendingHostCards = null
+        isGameStartSent = false
+        _connectionState.value = BluetoothGameManager.ConnectionState.DISCONNECTED
+    }
+
     private fun sendGameStart(cards: List<Card>) {
-        // Enviar los pairIds en el orden exacto
         val pairIds = cards.map { it.pairId }
         val message = BluetoothMessage.GameStart(pairIds)
         val serialized = BluetoothMessageSerializer.serialize(message)
-
-        android.util.Log.d("GameViewModel", "HOST: ===== ENVIANDO GAME START =====")
-        android.util.Log.d("GameViewModel", "HOST: Número de cartas: ${pairIds.size}")
-        android.util.Log.d("GameViewModel", "HOST: PairIds = $pairIds")
-        android.util.Log.d("GameViewModel", "HOST: Mensaje serializado: $serialized")
-
         bluetoothManager?.sendMessage(serialized)
-
-        // Enviar dos veces para asegurar que llega
         viewModelScope.launch {
             delay(500)
-            android.util.Log.d("GameViewModel", "HOST: Reenviando GameStart por seguridad")
             bluetoothManager?.sendMessage(serialized)
         }
     }
 
-    /**
-     * Envía que se volteó una carta
-     */
     private fun sendCardFlipped(cardIndex: Int) {
         val message = BluetoothMessage.CardFlipped(cardIndex)
-        val serialized = BluetoothMessageSerializer.serialize(message)
-        android.util.Log.d("GameViewModel", "Enviando CardFlipped: $serialized")
-        bluetoothManager?.sendMessage(serialized)
+        bluetoothManager?.sendMessage(BluetoothMessageSerializer.serialize(message))
     }
 
-    /**
-     * Envía el resultado de un intento de match
-     */
     private fun sendMatchResult(
         card1Index: Int,
         card2Index: Int,
@@ -512,64 +627,44 @@ class GameViewModel(
         player1Score: Int,
         player2Score: Int
     ) {
-        val message = BluetoothMessage.MatchResult(
-            card1Index, card2Index, isMatch, currentPlayer, player1Score, player2Score
-        )
-        val serialized = BluetoothMessageSerializer.serialize(message)
-        android.util.Log.d("GameViewModel", "Enviando MatchResult: $serialized")
-        bluetoothManager?.sendMessage(serialized)
+        val message = BluetoothMessage.MatchResult(card1Index, card2Index, isMatch, currentPlayer, player1Score, player2Score)
+        bluetoothManager?.sendMessage(BluetoothMessageSerializer.serialize(message))
     }
 
-    /**
-     * Obtiene el color para un pairId de forma consistente
-     */
-    private fun getColorForPairId(pairId: Int): androidx.compose.ui.graphics.Color {
+    private fun getColorForPairId(pairId: Int): Color {
         val colors = listOf(
-            androidx.compose.ui.graphics.Color(0xFFE91E63), // Pink
-            androidx.compose.ui.graphics.Color(0xFF9C27B0), // Purple
-            androidx.compose.ui.graphics.Color(0xFF3F51B5), // Indigo
-            androidx.compose.ui.graphics.Color(0xFF2196F3), // Blue
-            androidx.compose.ui.graphics.Color(0xFF00BCD4), // Cyan
-            androidx.compose.ui.graphics.Color(0xFF009688), // Teal
-            androidx.compose.ui.graphics.Color(0xFF4CAF50), // Green
-            androidx.compose.ui.graphics.Color(0xFFFF9800), // Orange
-            androidx.compose.ui.graphics.Color(0xFFFF5722), // Deep Orange
-            androidx.compose.ui.graphics.Color(0xFF795548), // Brown
-            androidx.compose.ui.graphics.Color(0xFFFFEB3B), // Yellow
-            androidx.compose.ui.graphics.Color(0xFFF44336)  // Red
+            Color(0xFFE91E63), Color(0xFF9C27B0), Color(0xFF3F51B5), Color(0xFF2196F3),
+            Color(0xFF00BCD4), Color(0xFF009688), Color(0xFF4CAF50), Color(0xFFFF9800),
+            Color(0xFFFF5722), Color(0xFF795548), Color(0xFFFFEB3B), Color(0xFFF44336)
         )
         return colors[pairId % colors.size]
     }
 
-    /**
-     * Determina el ganador del juego
-     */
-    private fun determineWinner(score1: Int, score2: Int): Player? {
+    private fun determineWinner(score1: Int, score2: Int, gameMode: GameMode): Player? {
+        if (gameMode == GameMode.CLARIVIDENTE) {
+            return Player.PLAYER1
+        }
         return when {
             score1 > score2 -> Player.PLAYER1
             score2 > score1 -> Player.PLAYER2
-            else -> null // Empate
+            else -> null
         }
     }
 
-    /**
-     * Reinicia el juego con las mismas configuraciones
-     */
     fun resetGame() {
         val currentMode = _gameState.value.gameMode
         val numberOfPairs = _gameState.value.cards.size / 2
         val isHost = _gameState.value.isBluetoothHost
+        val theme = _gameState.value.themeColor
 
         if (currentMode == GameMode.BLUETOOTH && isHost) {
             bluetoothManager?.sendMessage(BluetoothMessageSerializer.serialize(BluetoothMessage.GameReset))
         }
 
-        startGame(currentMode, numberOfPairs, isHost)
+        timerJob?.cancel()
+        startGame(currentMode, numberOfPairs, isHost, theme)
     }
 
-    /**
-     * Guarda las estadísticas del juego en la base de datos
-     */
     private fun saveGameStatistics() {
         viewModelScope.launch {
             val state = _gameState.value
@@ -584,19 +679,21 @@ class GameViewModel(
                 score = state.player1Score
             )
 
-            repository.updatePlayerStats(
-                playerName = player2Name,
-                won = state.winner == Player.PLAYER2,
-                pairsFound = state.player2Score,
-                moves = state.movesCount,
-                score = state.player2Score
-            )
+            if (state.gameMode == GameMode.LOCAL) {
+                repository.updatePlayerStats(
+                    playerName = player2Name,
+                    won = state.winner == Player.PLAYER2,
+                    pairsFound = state.player2Score,
+                    moves = state.movesCount,
+                    score = state.player2Score
+                )
+            }
 
             repository.saveGameHistory(
                 player1Name = player1Name,
-                player2Name = player2Name,
+                player2Name = if (state.gameMode == GameMode.LOCAL) player2Name else "Clarividente",
                 player1Score = state.player1Score,
-                player2Score = state.player2Score,
+                player2Score = if (state.gameMode == GameMode.LOCAL) state.player2Score else 0,
                 winner = state.winner?.getName(),
                 totalMoves = state.movesCount,
                 gameMode = state.gameMode.name
@@ -604,19 +701,13 @@ class GameViewModel(
         }
     }
 
-    /**
-     * Limpia recursos cuando el ViewModel se destruye
-     */
     override fun onCleared() {
         super.onCleared()
-        android.util.Log.d("GameViewModel", "onCleared - limpiando todos los recursos")
+        timerJob?.cancel()
         disconnectBluetooth()
     }
 }
 
-/**
- * Factory para crear el ViewModel con el repositorio
- */
 class GameViewModelFactory(private val context: Context) : ViewModelProvider.Factory {
     override fun <T : ViewModel> create(modelClass: Class<T>): T {
         if (modelClass.isAssignableFrom(GameViewModel::class.java)) {

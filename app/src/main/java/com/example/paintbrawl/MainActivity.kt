@@ -24,12 +24,19 @@ import androidx.core.content.ContextCompat
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.paintbrawl.bluetooth.BluetoothGameManager
 import com.example.paintbrawl.model.GameMode
+import com.example.paintbrawl.ui.components.SaveErrorDialog
+import com.example.paintbrawl.ui.components.SaveGameDialog
+import com.example.paintbrawl.ui.components.SaveSuccessDialog
 import com.example.paintbrawl.ui.screens.GameScreen
 import com.example.paintbrawl.ui.screens.MenuScreen
+import com.example.paintbrawl.ui.screens.SavedGamesScreen
+import com.example.paintbrawl.ui.screens.SettingsScreen
+import com.example.paintbrawl.ui.screens.StatsScreen
 import com.example.paintbrawl.ui.theme.PaintbrawlTheme
 import com.example.paintbrawl.viewmodel.GameViewModel
 import com.example.paintbrawl.viewmodel.GameViewModelFactory
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
     private val bluetoothAdapter: BluetoothAdapter? by lazy {
@@ -60,16 +67,23 @@ class MainActivity : ComponentActivity() {
         requestBluetoothPermissions()
 
         setContent {
-            PaintbrawlTheme {
+            val viewModel: GameViewModel = viewModel(
+                factory = GameViewModelFactory(applicationContext)
+            )
+
+            val currentTheme by viewModel.currentTheme.collectAsState()
+            val preferredSaveFormat by viewModel.preferredSaveFormat.collectAsState()
+
+            PaintbrawlTheme(currentThemeColor = currentTheme) {
                 Surface(
                     modifier = Modifier.fillMaxSize(),
                     color = MaterialTheme.colorScheme.background
                 ) {
-                    val viewModel: GameViewModel = viewModel(
-                        factory = GameViewModelFactory(applicationContext)
-                    )
-
                     var currentScreen by remember { mutableStateOf("menu") }
+                    var showSaveDialog by remember { mutableStateOf(false) }
+                    var saveResult by remember { mutableStateOf<Result<String>?>(null) }
+                    val coroutineScope = rememberCoroutineScope()
+
                     val connectionState by viewModel.connectionState.collectAsState()
                     val gameState by viewModel.gameState.collectAsState()
 
@@ -78,7 +92,6 @@ class MainActivity : ComponentActivity() {
                         android.util.Log.d("MainActivity", "Estado conexión cambió a: $connectionState")
 
                         if (connectionState == BluetoothGameManager.ConnectionState.CONNECTED) {
-                            // Esperar un momento para asegurar sincronización
                             delay(500)
                             if (currentScreen == "menu") {
                                 android.util.Log.d("MainActivity", "Cambiando a pantalla de juego")
@@ -86,7 +99,6 @@ class MainActivity : ComponentActivity() {
                             }
                         }
 
-                        // Si se desconecta durante el juego, volver al menú
                         if (connectionState == BluetoothGameManager.ConnectionState.DISCONNECTED
                             && currentScreen == "game"
                             && gameState.gameMode == GameMode.BLUETOOTH
@@ -97,76 +109,155 @@ class MainActivity : ComponentActivity() {
                         }
                     }
 
-                    when (currentScreen) {
-                        "menu" -> MenuScreen(
-                            onStartGame = { gameMode, isHost ->
-                                android.util.Log.d("MainActivity", "Iniciando juego - Modo: $gameMode, Host: $isHost")
+                    Box(modifier = Modifier.fillMaxSize()) {
+                        when (currentScreen) {
+                            "menu" -> MenuScreen(
+                                onStartGame = { gameMode, isHost, theme ->
+                                    android.util.Log.d("MainActivity", "Iniciando juego - Modo: $gameMode, Host: $isHost")
 
-                                if (gameMode == GameMode.LOCAL) {
-                                    viewModel.startGame(gameMode, 8, isHost)
-                                    currentScreen = "game"
+                                    viewModel.setTheme(theme)
+
+                                    if (gameMode == GameMode.LOCAL || gameMode == GameMode.CLARIVIDENTE) {
+                                        viewModel.startGame(gameMode, 8, isHost, theme)
+                                        currentScreen = "game"
+                                    } else if (gameMode == GameMode.BLUETOOTH) {
+                                        viewModel.startGame(gameMode, 8, isHost, theme)
+                                    }
+                                },
+                                onShowStats = {
+                                    currentScreen = "stats"
+                                },
+                                onShowSavedGames = {
+                                    currentScreen = "saved_games"
+                                },
+                                onShowSettings = {
+                                    currentScreen = "settings"
+                                },
+                                bluetoothAdapter = bluetoothAdapter,
+                                onStartBluetoothServer = {
+                                    android.util.Log.d("MainActivity", "Iniciando servidor Bluetooth")
+                                    viewModel.startBluetoothServer()
+                                },
+                                onConnectToDevice = { device ->
+                                    android.util.Log.d("MainActivity", "Conectando a dispositivo: ${device.name}")
+                                    viewModel.connectToDevice(device)
+                                },
+                                getPairedDevices = {
+                                    viewModel.getPairedDevices()
+                                },
+                                currentTheme = currentTheme
+                            )
+
+                            "game" -> {
+                                if (gameState.gameMode == GameMode.BLUETOOTH &&
+                                    connectionState != BluetoothGameManager.ConnectionState.CONNECTED) {
+                                    Box(
+                                        modifier = Modifier.fillMaxSize(),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        CircularProgressIndicator()
+                                        Text(
+                                            text = if (gameState.isBluetoothHost)
+                                                "Esperando jugador 2..."
+                                            else
+                                                "Conectando...",
+                                            modifier = Modifier.align(Alignment.BottomCenter)
+                                        )
+                                    }
                                 } else {
-                                    // En modo Bluetooth, iniciar el ViewModel
-                                    // La transición a "game" se hará cuando se conecte
-                                    viewModel.startGame(gameMode, 8, isHost)
-                                }
-                            },
-                            onShowStats = {
-                                currentScreen = "stats"
-                            },
-                            bluetoothAdapter = bluetoothAdapter,
-                            onStartBluetoothServer = {
-                                android.util.Log.d("MainActivity", "Iniciando servidor Bluetooth")
-                                viewModel.startBluetoothServer()
-                            },
-                            onConnectToDevice = { device ->
-                                android.util.Log.d("MainActivity", "Conectando a dispositivo: ${device.name}")
-                                viewModel.connectToDevice(device)
-                            },
-                            getPairedDevices = {
-                                viewModel.getPairedDevices()
-                            }
-                        )
+                                    GameScreen(
+                                        viewModel = viewModel,
+                                        onBackToMenu = {
+                                            android.util.Log.d("MainActivity", "Volviendo al menú")
 
-                        "game" -> {
-                            // Mostrar pantalla de espera si está en modo Bluetooth y no está conectado
-                            if (gameState.gameMode == GameMode.BLUETOOTH &&
-                                connectionState != BluetoothGameManager.ConnectionState.CONNECTED) {
-                                Box(
-                                    modifier = Modifier.fillMaxSize(),
-                                    contentAlignment = Alignment.Center
-                                ) {
-                                    CircularProgressIndicator()
-                                    Text(
-                                        text = if (gameState.isBluetoothHost)
-                                            "Esperando jugador 2..."
-                                        else
-                                            "Conectando...",
-                                        modifier = Modifier.align(Alignment.BottomCenter)
+                                            if (gameState.gameMode == GameMode.BLUETOOTH) {
+                                                viewModel.disconnectBluetooth()
+                                            }
+
+                                            currentScreen = "menu"
+                                        },
+                                        onSaveGame = {
+                                            if (gameState.gameMode != GameMode.BLUETOOTH) {
+                                                showSaveDialog = true
+                                            }
+                                        }
                                     )
                                 }
-                            } else {
-                                GameScreen(
-                                    viewModel = viewModel,
-                                    onBackToMenu = {
-                                        android.util.Log.d("MainActivity", "Volviendo al menú, desconectando Bluetooth")
 
-                                        // Desconectar Bluetooth antes de volver al menú
-                                        if (gameState.gameMode == GameMode.BLUETOOTH) {
-                                            viewModel.disconnectBluetooth()
+                                // Diálogo de guardado
+                                if (showSaveDialog) {
+                                    SaveGameDialog(
+                                        onDismiss = { showSaveDialog = false },
+                                        onSave = { name, format, tags ->
+                                            viewModel.setSaveFormat(format)
+                                            coroutineScope.launch {
+                                                val result = viewModel.saveCurrentGame(name, tags)
+                                                saveResult = result
+                                                showSaveDialog = false
+                                            }
+                                        },
+                                        currentFormat = preferredSaveFormat
+                                    )
+                                }
+
+                                // Diálogo de resultado de guardado
+                                saveResult?.let { result ->
+                                    result.fold(
+                                        onSuccess = { fileName ->
+                                            SaveSuccessDialog(
+                                                fileName = fileName,
+                                                onDismiss = { saveResult = null }
+                                            )
+                                        },
+                                        onFailure = { error ->
+                                            SaveErrorDialog(
+                                                error = error.message ?: "Error desconocido",
+                                                onDismiss = { saveResult = null }
+                                            )
                                         }
+                                    )
+                                }
+                            }
 
-                                        currentScreen = "menu"
+                            "saved_games" -> SavedGamesScreen(
+                                onBack = {
+                                    currentScreen = "menu"
+                                },
+                                onLoadGame = { fileName ->
+                                    coroutineScope.launch {
+                                        val result = viewModel.loadSavedGame(fileName)
+                                        result.fold(
+                                            onSuccess = {
+                                                currentScreen = "game"
+                                            },
+                                            onFailure = { error ->
+                                                android.util.Log.e("MainActivity", "Error cargando: ${error.message}")
+                                            }
+                                        )
                                     }
-                                )
-                            }
-                        }
+                                }
+                            )
 
-                        "stats" -> com.example.paintbrawl.ui.screens.StatsScreen(
-                            onBack = {
-                                currentScreen = "menu"
-                            }
-                        )
+                            "settings" -> SettingsScreen(
+                                onBack = {
+                                    currentScreen = "menu"
+                                },
+                                currentTheme = currentTheme,
+                                onThemeChange = { theme ->
+                                    viewModel.setTheme(theme)
+                                },
+                                currentSaveFormat = preferredSaveFormat,
+                                onSaveFormatChange = { format ->
+                                    viewModel.setSaveFormat(format)
+                                }
+                            )
+
+                            "stats" -> StatsScreen(
+                                onBack = {
+                                    currentScreen = "menu"
+                                }
+                            )
+                        }
                     }
                 }
             }

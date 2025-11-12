@@ -9,6 +9,8 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -20,35 +22,36 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.paintbrawl.model.GameMode
+import com.example.paintbrawl.model.ThemeColor
 
-/**
- * Pantalla del menú principal
- */
 @Composable
 fun MenuScreen(
-    onStartGame: (GameMode, Boolean) -> Unit,
+    onStartGame: (GameMode, Boolean, ThemeColor) -> Unit,
     onShowStats: () -> Unit,
+    onShowSavedGames: () -> Unit,
+    onShowSettings: () -> Unit,
     bluetoothAdapter: BluetoothAdapter?,
     onStartBluetoothServer: () -> Unit = {},
     onConnectToDevice: (BluetoothDevice) -> Unit = {},
-    getPairedDevices: () -> Set<BluetoothDevice> = { emptySet() }
+    getPairedDevices: () -> Set<BluetoothDevice> = { emptySet() },
+    currentTheme: ThemeColor = ThemeColor.AZUL
 ) {
     var showModeSelection by remember { mutableStateOf(false) }
     var showBluetoothDialog by remember { mutableStateOf(false) }
     var showDeviceSelection by remember { mutableStateOf(false) }
     var isWaitingForConnection by remember { mutableStateOf(false) }
+    var showThemeSelection by remember { mutableStateOf(false) }
+    var selectedTheme by remember { mutableStateOf(currentTheme) }
+
+    val gradient = when (selectedTheme) {
+        ThemeColor.GUINDA -> listOf(Color(0xFF6C1D45), Color(0xFF9B2D5E))
+        ThemeColor.AZUL -> listOf(Color(0xFF1A237E), Color(0xFF311B92))
+    }
 
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(
-                Brush.verticalGradient(
-                    colors = listOf(
-                        Color(0xFF1A237E),
-                        Color(0xFF311B92)
-                    )
-                )
-            ),
+            .background(Brush.verticalGradient(colors = gradient)),
         contentAlignment = Alignment.Center
     ) {
         Column(
@@ -90,19 +93,33 @@ fun MenuScreen(
                 ) {
                     MenuButton(
                         text = "Jugar",
+                        icon = Icons.Default.PlayArrow,
                         onClick = { showModeSelection = true }
                     )
 
                     MenuButton(
+                        text = "Cargar Partida",
+                        icon = Icons.Default.FolderOpen,
+                        onClick = onShowSavedGames
+                    )
+
+                    MenuButton(
                         text = "Estadísticas",
+                        icon = Icons.Default.BarChart,
                         onClick = onShowStats
+                    )
+
+                    MenuButton(
+                        text = "Configuración",
+                        icon = Icons.Default.Settings,
+                        onClick = onShowSettings
                     )
                 }
             }
 
             // Selección de modo de juego
             AnimatedVisibility(
-                visible = showModeSelection && !showBluetoothDialog && !showDeviceSelection,
+                visible = showModeSelection && !showBluetoothDialog && !showDeviceSelection && !showThemeSelection,
                 enter = fadeIn() + expandVertically(),
                 exit = fadeOut() + shrinkVertically()
             ) {
@@ -119,14 +136,23 @@ fun MenuScreen(
                     )
 
                     MenuButton(
-                        text = "Modo Local",
+                        text = "Modo Local (2 Jugadores)",
                         subtitle = "Dos jugadores en un dispositivo",
-                        onClick = { onStartGame(GameMode.LOCAL, false) }
+                        icon = Icons.Default.Group,
+                        onClick = { showThemeSelection = true }
+                    )
+
+                    MenuButton(
+                        text = "Modo Clarividente",
+                        subtitle = "Un jugador, 24 cartas, 3 vidas",
+                        icon = Icons.Default.Visibility,
+                        onClick = { showThemeSelection = true }
                     )
 
                     MenuButton(
                         text = "Modo Bluetooth",
                         subtitle = "Jugar por Bluetooth",
+                        icon = Icons.Default.Bluetooth,
                         onClick = { showBluetoothDialog = true },
                         enabled = bluetoothAdapter?.isEnabled == true
                     )
@@ -143,6 +169,81 @@ fun MenuScreen(
                     TextButton(
                         onClick = { showModeSelection = false },
                         modifier = Modifier.padding(top = 16.dp)
+                    ) {
+                        Text(
+                            text = "Regresar",
+                            color = Color.White,
+                            fontSize = 16.sp
+                        )
+                    }
+                }
+            }
+
+            // Selección de tema
+            AnimatedVisibility(
+                visible = showThemeSelection,
+                enter = fadeIn() + expandVertically(),
+                exit = fadeOut() + shrinkVertically()
+            ) {
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(16.dp)
+                ) {
+                    Text(
+                        text = "Selecciona el tema",
+                        fontSize = 20.sp,
+                        color = Color.White,
+                        fontWeight = FontWeight.Medium,
+                        modifier = Modifier.padding(bottom = 16.dp)
+                    )
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(16.dp)
+                    ) {
+                        ThemeCard(
+                            theme = ThemeColor.GUINDA,
+                            selected = selectedTheme == ThemeColor.GUINDA,
+                            onClick = { selectedTheme = ThemeColor.GUINDA },
+                            modifier = Modifier.weight(1f)
+                        )
+
+                        ThemeCard(
+                            theme = ThemeColor.AZUL,
+                            selected = selectedTheme == ThemeColor.AZUL,
+                            onClick = { selectedTheme = ThemeColor.AZUL },
+                            modifier = Modifier.weight(1f)
+                        )
+                    }
+
+                    Button(
+                        onClick = {
+                            val mode = if (showModeSelection) {
+                                // Determinar qué modo se seleccionó antes
+                                // Por defecto LOCAL, podemos mejorarlo guardando el estado
+                                GameMode.LOCAL
+                            } else {
+                                GameMode.LOCAL
+                            }
+                            onStartGame(mode, false, selectedTheme)
+                        },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(60.dp),
+                        shape = RoundedCornerShape(16.dp),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = Color.White.copy(alpha = 0.3f)
+                        )
+                    ) {
+                        Text("Comenzar", fontSize = 20.sp, fontWeight = FontWeight.Bold)
+                    }
+
+                    TextButton(
+                        onClick = {
+                            showThemeSelection = false
+                            showModeSelection = true
+                        },
+                        modifier = Modifier.padding(top = 8.dp)
                     ) {
                         Text(
                             text = "Regresar",
@@ -174,16 +275,18 @@ fun MenuScreen(
                     MenuButton(
                         text = "Crear Partida (Host)",
                         subtitle = "Ser el jugador 1 y esperar conexión",
+                        icon = Icons.Default.Wifi,
                         onClick = {
                             isWaitingForConnection = true
                             onStartBluetoothServer()
-                            onStartGame(GameMode.BLUETOOTH, true)
+                            onStartGame(GameMode.BLUETOOTH, true, selectedTheme)
                         }
                     )
 
                     MenuButton(
                         text = "Unirse a Partida (Cliente)",
                         subtitle = "Conectarse como jugador 2",
+                        icon = Icons.Default.ConnectWithoutContact,
                         onClick = {
                             showDeviceSelection = true
                         }
@@ -267,7 +370,7 @@ fun MenuScreen(
                     pairedDevices = getPairedDevices(),
                     onDeviceSelected = { device ->
                         onConnectToDevice(device)
-                        onStartGame(GameMode.BLUETOOTH, false)
+                        onStartGame(GameMode.BLUETOOTH, false, selectedTheme)
                         showDeviceSelection = false
                     },
                     onBack = {
@@ -280,9 +383,138 @@ fun MenuScreen(
     }
 }
 
-/**
- * Pantalla de selección de dispositivos Bluetooth
- */
+@Composable
+fun ThemeCard(
+    theme: ThemeColor,
+    selected: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Card(
+        modifier = modifier
+            .height(120.dp)
+            .clickable(onClick = onClick),
+        colors = CardDefaults.cardColors(
+            containerColor = if (selected)
+                Color.White.copy(alpha = 0.3f)
+            else
+                Color.White.copy(alpha = 0.1f)
+        ),
+        shape = RoundedCornerShape(16.dp),
+        border = if (selected)
+            androidx.compose.foundation.BorderStroke(3.dp, Color.White)
+        else null
+    ) {
+        Box(
+            modifier = Modifier.fillMaxSize(),
+            contentAlignment = Alignment.Center
+        ) {
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.Center
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(48.dp)
+                        .background(
+                            brush = Brush.radialGradient(
+                                colors = listOf(
+                                    Color(theme.primaryColor),
+                                    Color(theme.secondaryColor)
+                                )
+                            ),
+                            shape = RoundedCornerShape(24.dp)
+                        )
+                )
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                Text(
+                    text = when (theme) {
+                        ThemeColor.GUINDA -> "Guinda"
+                        ThemeColor.AZUL -> "Azul"
+                    },
+                    fontSize = 16.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = Color.White
+                )
+
+                if (selected) {
+                    Text(
+                        text = "✓",
+                        fontSize = 20.sp,
+                        color = Color.White
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun MenuButton(
+    text: String,
+    subtitle: String? = null,
+    icon: androidx.compose.ui.graphics.vector.ImageVector? = null,
+    onClick: () -> Unit,
+    enabled: Boolean = true
+) {
+    Button(
+        onClick = onClick,
+        enabled = enabled,
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(if (subtitle != null) 80.dp else 60.dp),
+        shape = RoundedCornerShape(16.dp),
+        colors = ButtonDefaults.buttonColors(
+            containerColor = Color.White.copy(alpha = 0.2f),
+            contentColor = Color.White,
+            disabledContainerColor = Color.Gray.copy(alpha = 0.2f),
+            disabledContentColor = Color.Gray
+        ),
+        elevation = ButtonDefaults.buttonElevation(
+            defaultElevation = 8.dp,
+            pressedElevation = 4.dp,
+            disabledElevation = 0.dp
+        )
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.Center,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            icon?.let {
+                Icon(
+                    imageVector = it,
+                    contentDescription = null,
+                    modifier = Modifier
+                        .size(24.dp)
+                        .padding(end = 8.dp)
+                )
+            }
+
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.Center
+            ) {
+                Text(
+                    text = text,
+                    fontSize = 20.sp,
+                    fontWeight = FontWeight.Bold
+                )
+
+                if (subtitle != null) {
+                    Text(
+                        text = subtitle,
+                        fontSize = 14.sp,
+                        color = Color.White.copy(alpha = 0.7f)
+                    )
+                }
+            }
+        }
+    }
+}
+
 @Composable
 fun DeviceSelectionScreen(
     pairedDevices: Set<BluetoothDevice>,
@@ -360,9 +592,6 @@ fun DeviceSelectionScreen(
     }
 }
 
-/**
- * Item de dispositivo Bluetooth
- */
 @Composable
 fun DeviceItem(
     device: BluetoothDevice,
@@ -400,56 +629,6 @@ fun DeviceItem(
                 Text(
                     text = device.address,
                     fontSize = 12.sp,
-                    color = Color.White.copy(alpha = 0.7f)
-                )
-            }
-        }
-    }
-}
-
-/**
- * Componente de botón personalizado para el menú
- */
-@Composable
-fun MenuButton(
-    text: String,
-    subtitle: String? = null,
-    onClick: () -> Unit,
-    enabled: Boolean = true
-) {
-    Button(
-        onClick = onClick,
-        enabled = enabled,
-        modifier = Modifier
-            .fillMaxWidth()
-            .height(if (subtitle != null) 80.dp else 60.dp),
-        shape = RoundedCornerShape(16.dp),
-        colors = ButtonDefaults.buttonColors(
-            containerColor = Color.White.copy(alpha = 0.2f),
-            contentColor = Color.White,
-            disabledContainerColor = Color.Gray.copy(alpha = 0.2f),
-            disabledContentColor = Color.Gray
-        ),
-        elevation = ButtonDefaults.buttonElevation(
-            defaultElevation = 8.dp,
-            pressedElevation = 4.dp,
-            disabledElevation = 0.dp
-        )
-    ) {
-        Column(
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.Center
-        ) {
-            Text(
-                text = text,
-                fontSize = 20.sp,
-                fontWeight = FontWeight.Bold
-            )
-
-            if (subtitle != null) {
-                Text(
-                    text = subtitle,
-                    fontSize = 14.sp,
                     color = Color.White.copy(alpha = 0.7f)
                 )
             }

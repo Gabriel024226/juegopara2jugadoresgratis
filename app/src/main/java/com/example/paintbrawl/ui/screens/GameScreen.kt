@@ -11,8 +11,7 @@ import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.itemsIndexed
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.ArrowBack
-import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -37,7 +36,8 @@ import com.example.paintbrawl.viewmodel.GameViewModel
 @Composable
 fun GameScreen(
     viewModel: GameViewModel,
-    onBackToMenu: () -> Unit
+    onBackToMenu: () -> Unit,
+    onSaveGame: (() -> Unit)? = null
 ) {
     val gameState by viewModel.gameState.collectAsState()
     val showMatchAnimation by viewModel.showMatchAnimation.collectAsState()
@@ -62,8 +62,8 @@ fun GameScreen(
             .background(
                 Brush.verticalGradient(
                     colors = listOf(
-                        Color(0xFF0D47A1),
-                        Color(0xFF1976D2)
+                        Color(gameState.themeColor.primaryColor),
+                        Color(gameState.themeColor.secondaryColor)
                     )
                 )
             )
@@ -115,6 +115,12 @@ fun GameScreen(
                         }
                     },
                     actions = {
+                        // Botón de guardar solo para modos LOCAL y CLARIVIDENTE
+                        if (gameState.gameMode != GameMode.BLUETOOTH && !gameState.isGameOver && onSaveGame != null) {
+                            IconButton(onClick = onSaveGame) {
+                                Icon(Icons.Default.Save, "Guardar")
+                            }
+                        }
                         IconButton(onClick = { viewModel.resetGame() }) {
                             Icon(Icons.Default.Refresh, "Reiniciar")
                         }
@@ -130,14 +136,23 @@ fun GameScreen(
                 Spacer(modifier = Modifier.height(16.dp))
 
                 // Panel de información de jugadores
-                PlayerInfoPanel(
-                    currentPlayer = gameState.currentPlayer,
-                    score1 = gameState.player1Score,
-                    score2 = gameState.player2Score,
-                    isBluetoothMode = gameState.gameMode == GameMode.BLUETOOTH,
-                    localPlayer = gameState.localPlayer,
-                    isMyTurn = gameState.isMyTurn
-                )
+                if (gameState.gameMode != GameMode.CLARIVIDENTE) {
+                    PlayerInfoPanel(
+                        currentPlayer = gameState.currentPlayer,
+                        score1 = gameState.player1Score,
+                        score2 = gameState.player2Score,
+                        isBluetoothMode = gameState.gameMode == GameMode.BLUETOOTH,
+                        localPlayer = gameState.localPlayer,
+                        isMyTurn = gameState.isMyTurn
+                    )
+                } else {
+                    // Panel para modo Clarividente
+                    ClarividenteInfoPanel(
+                        score = gameState.player1Score,
+                        lives = gameState.lives,
+                        timeElapsed = gameState.timeElapsed
+                    )
+                }
 
                 Spacer(modifier = Modifier.height(16.dp))
 
@@ -148,6 +163,9 @@ fun GameScreen(
                 ) {
                     InfoCard("Movimientos", gameState.movesCount.toString())
                     InfoCard("Parejas", "${gameState.pairsFound}/${gameState.cards.size / 2}")
+                    if (gameState.gameMode != GameMode.CLARIVIDENTE) {
+                        InfoCard("Tiempo", formatTime(gameState.timeElapsed))
+                    }
                 }
 
                 Spacer(modifier = Modifier.height(24.dp))
@@ -207,16 +225,109 @@ fun GameScreen(
 
             // Diálogo de fin de juego
             if (showGameOverDialog) {
-                GameOverDialog(
-                    winner = gameState.winner,
-                    player1Score = gameState.player1Score,
-                    player2Score = gameState.player2Score,
-                    onDismiss = { showGameOverDialog = false },
-                    onPlayAgain = {
-                        viewModel.resetGame()
-                        showGameOverDialog = false
-                    },
-                    onBackToMenu = onBackToMenu
+                if (gameState.gameMode == GameMode.CLARIVIDENTE) {
+                    ClarividenteGameOverDialog(
+                        won = gameState.lives > 0,
+                        score = gameState.player1Score,
+                        totalPairs = gameState.cards.size / 2,
+                        moves = gameState.movesCount,
+                        time = gameState.timeElapsed,
+                        onDismiss = { showGameOverDialog = false },
+                        onPlayAgain = {
+                            viewModel.resetGame()
+                            showGameOverDialog = false
+                        },
+                        onBackToMenu = onBackToMenu
+                    )
+                } else {
+                    GameOverDialog(
+                        winner = gameState.winner,
+                        player1Score = gameState.player1Score,
+                        player2Score = gameState.player2Score,
+                        onDismiss = { showGameOverDialog = false },
+                        onPlayAgain = {
+                            viewModel.resetGame()
+                            showGameOverDialog = false
+                        },
+                        onBackToMenu = onBackToMenu
+                    )
+                }
+            }
+        }
+    }
+}
+
+/**
+ * Panel de información para modo Clarividente
+ */
+@Composable
+fun ClarividenteInfoPanel(
+    score: Int,
+    lives: Int,
+    timeElapsed: Long
+) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(
+            containerColor = Color.White.copy(alpha = 0.2f)
+        ),
+        shape = RoundedCornerShape(16.dp)
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp),
+            horizontalArrangement = Arrangement.SpaceEvenly,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            // Puntuación
+            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                Text(
+                    text = "Puntos",
+                    fontSize = 14.sp,
+                    color = Color.White.copy(alpha = 0.7f)
+                )
+                Text(
+                    text = score.toString(),
+                    fontSize = 32.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = Color.White
+                )
+            }
+
+            // Vidas
+            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                Text(
+                    text = "Vidas",
+                    fontSize = 14.sp,
+                    color = Color.White.copy(alpha = 0.7f)
+                )
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(4.dp),
+                    modifier = Modifier.padding(top = 4.dp)
+                ) {
+                    repeat(3) { index ->
+                        Text(
+                            text = if (index < lives) "❤️" else "🖤",
+                            fontSize = 24.sp
+                        )
+                    }
+                }
+            }
+
+            // Tiempo
+            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                Icon(
+                    imageVector = Icons.Default.Timer,
+                    contentDescription = "Tiempo",
+                    tint = Color.White,
+                    modifier = Modifier.size(20.dp)
+                )
+                Text(
+                    text = formatTime(timeElapsed),
+                    fontSize = 20.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = Color.White
                 )
             }
         }
@@ -436,6 +547,97 @@ fun CardItem(
 }
 
 /**
+ * Diálogo de fin de juego para modo Clarividente
+ */
+@Composable
+fun ClarividenteGameOverDialog(
+    won: Boolean,
+    score: Int,
+    totalPairs: Int,
+    moves: Int,
+    time: Long,
+    onDismiss: () -> Unit,
+    onPlayAgain: () -> Unit,
+    onBackToMenu: () -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                Text(
+                    text = if (won) "🎉" else "😔",
+                    fontSize = 48.sp
+                )
+                Text(
+                    text = if (won) "¡Victoria!" else "Game Over",
+                    fontSize = 28.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = if (won) Color(0xFF4CAF50) else Color(0xFFFF5722)
+                )
+            }
+        },
+        text = {
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                if (won) {
+                    Text(
+                        text = "¡Completaste el juego!",
+                        fontSize = 18.sp,
+                        fontWeight = FontWeight.Medium
+                    )
+                } else {
+                    Text(
+                        text = "Te quedaste sin vidas",
+                        fontSize = 18.sp,
+                        fontWeight = FontWeight.Medium
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(16.dp))
+
+                Divider()
+
+                Spacer(modifier = Modifier.height(16.dp))
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceEvenly
+                ) {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Text("Parejas", fontWeight = FontWeight.Bold)
+                        Text("$score/$totalPairs", fontSize = 24.sp)
+                    }
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Text("Movimientos", fontWeight = FontWeight.Bold)
+                        Text(moves.toString(), fontSize = 24.sp)
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Text("Tiempo", fontWeight = FontWeight.Bold)
+                    Text(formatTime(time), fontSize = 24.sp)
+                }
+            }
+        },
+        confirmButton = {
+            Button(onClick = onPlayAgain) {
+                Text("Jugar de nuevo")
+            }
+        },
+        dismissButton = {
+            OutlinedButton(onClick = onBackToMenu) {
+                Text("Menú principal")
+            }
+        },
+        containerColor = Color.White,
+        shape = RoundedCornerShape(24.dp)
+    )
+}
+
+/**
  * Diálogo de fin de juego
  */
 @Composable
@@ -498,4 +700,19 @@ fun GameOverDialog(
         containerColor = Color.White,
         shape = RoundedCornerShape(24.dp)
     )
+}
+
+/**
+ * Función para formatear tiempo
+ */
+private fun formatTime(millis: Long): String {
+    val seconds = (millis / 1000) % 60
+    val minutes = (millis / (1000 * 60)) % 60
+    val hours = (millis / (1000 * 60 * 60))
+
+    return if (hours > 0) {
+        String.format("%02d:%02d:%02d", hours, minutes, seconds)
+    } else {
+        String.format("%02d:%02d", minutes, seconds)
+    }
 }

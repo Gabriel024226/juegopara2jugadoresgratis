@@ -8,7 +8,9 @@ import com.example.paintbrawl.ui.theme.*
  */
 enum class GameMode {
     LOCAL,      // Dos jugadores en el mismo dispositivo
-    BLUETOOTH   // Dos jugadores vía Bluetooth
+    BLUETOOTH,   // Dos jugadores vía Bluetooth
+
+    CLARIVIDENTE //Un jugador en modo clarividente
 }
 
 /**
@@ -32,7 +34,10 @@ enum class Player {
         }
     }
 }
-
+enum class ThemeColor(val primaryColor: Long, val secondaryColor: Long) {
+    GUINDA(0xFF6C1D45, 0xFF9B2D5E),
+    AZUL(0xFF00709E, 0xFF0092CC)
+}
 /**
  * Data class que representa una carta del memorama
  */
@@ -61,7 +66,11 @@ data class GameState(
     val pairsFound: Int = 0,
     val isBluetoothHost: Boolean = false,  // Si es el host en modo Bluetooth
     val localPlayer: Player = Player.PLAYER1,  // Qué jugador es este dispositivo
-    val isMyTurn: Boolean = true  // Si es el turno del jugador local
+    val isMyTurn: Boolean = true, // Si es el turno del jugador local
+    val lives: Int = 3,
+    val timeElapsed: Long = 0,
+    val themeColor: ThemeColor = ThemeColor.AZUL,
+    val movementHistory: List<Movement> = emptyList()
 )
 
 /**
